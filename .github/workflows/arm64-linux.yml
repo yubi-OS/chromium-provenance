@@ -38,6 +38,11 @@ jobs:
             if sudo -n true; then echo SUDO_AVAILABLE; else echo NO_PASSWORDLESS_SUDO; fi
           } | tee evidence/host.txt
           test "$(uname -m)" = aarch64
+      - name: Check host prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/bootstrap-arm64-host.sh --check 2>&1 | tee evidence/prerequisites.txt
       - name: Compile and run native policy tests
         shell: bash
         run: |
@@ -47,6 +52,12 @@ jobs:
             -o evidence/policy_test
           evidence/policy_test | tee evidence/policy-test.txt
           file evidence/policy_test | tee evidence/policy-elf.txt
+      - name: Run verifier tests on ARM64
+        working-directory: verifier
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --test 2>&1 | tee ../evidence/verifier-test.txt
       - name: Upload qualification evidence
         if: always()
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f

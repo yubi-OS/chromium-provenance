@@ -1,12 +1,12 @@
 # chromium-provenance
 
-Overlay for [`yubi-OS/chromium`](https://github.com/yubi-OS/chromium) (a clean mirror fork) that turns Chromium into a **provenance-gated browser**: a page renders only if no configured detector reports AI-generated content, with an optional strict mode that additionally requires valid C2PA provenance on media.
+Experimental overlay for [`yubi-OS/chromium`](https://github.com/yubi-OS/chromium), a clean mirror fork. The intended browser will gate rendering on configured AI-content signals, with an optional strict provenance mode. Current implementation contains a standalone policy engine and verifier scaffolding; browser interception and detector integration remain unbuilt.
 
 Same model as Brave / ungoogled-chromium: the fork stays pristine, this repo pins a Chromium tag (`PINNED.md`) and carries the delta (`components/`, `patches/`, `policy/`, `verifier/`).
 
 ## What it can and cannot promise
 
-- **Can:** block pages where a detector fires — Anthropic Claude ("Fable" 5.1 / Mythos 5.1) text watermark, Google SynthID, OpenAI provenance signals, Adobe TrustMark, C2PA manifests recording AI actions, open-source zero-shot classifiers (Binoculars) above a conservative threshold.
+- **Planned detection targets:** Anthropic Claude watermark, Google SynthID, OpenAI provenance signals, Adobe TrustMark, C2PA AI-action declarations and calibrated text classifiers. Access, actual schemas and calibration must be verified before enabling any adapter.
 - **Cannot:** certify content is human-made. Every vendor states in writing that absence of a mark is not evidence of human authorship. Unwatermarked models, paraphrased text and pre-2026-08-02 Claude output are invisible to watermark detectors. We say so on the interstitial.
 
 ## Modes
@@ -29,4 +29,4 @@ docs/adr/                    Architecture decision records
 
 ## Build
 
-Chromium needs ~1–3 h on 32+ cores / 64 GB. CI here only builds and tests the policy engine and the verifier; the full browser build runs on a self-hosted or GitHub large runner (see `docs/adr/ADR-000-provenance-gate.md` §4).
+Linux ARM64 qualification runs on the org's `HIGH-MEM` self-hosted runner (12 CPUs, 62 GiB RAM observed). See [ARM64 CI](docs/arm64-linux-ci.md) for host setup, access restrictions, evidence and native toolchain limitations. The qualification run reached the runner but failed because compilers are absent and CI cannot install them without an administrator. Full Chromium builds and browser-level provenance enforcement are **not implemented or verified yet**. Existing green CI covers standalone policy logic and verifier scaffolding only.
