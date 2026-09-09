@@ -1,0 +1,57 @@
+name: Chromium Linux ARM64
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: chromium-high-mem
+  cancel-in-progress: false
+
+jobs:
+  qualify:
+    if: github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, Linux, ARM64, HIGH-MEM]
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Record host and disk capacity
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p evidence
+          {
+            date -u +%FT%TZ
+            uname -a
+            cat /etc/os-release
+            nproc
+            free -h
+            df -h "$GITHUB_WORKSPACE" "$HOME"
+            id
+            for tool in git python3 gcc g++ clang clang++ rustc cargo cmake ninja node pkg-config; do
+              command -v "$tool" || true
+            done
+            if sudo -n true; then echo SUDO_AVAILABLE; else echo NO_PASSWORDLESS_SUDO; fi
+          } | tee evidence/host.txt
+          test "$(uname -m)" = aarch64
+      - name: Compile and run native policy tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          g++ -std=c++20 -Wall -Wextra -Werror -DSTANDALONE_TEST -I. \
+            components/provenance_gate/policy.cc components/provenance_gate/policy_unittest.cc \
+            -o evidence/policy_test
+          evidence/policy_test | tee evidence/policy-test.txt
+          file evidence/policy_test | tee evidence/policy-elf.txt
+      - name: Upload qualification evidence
+        if: always()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
+        with:
+          name: arm64-qualification-${{ github.run_id }}
+          path: evidence/
+          retention-days: 7
+          if-no-files-found: error
