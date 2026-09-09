@@ -4,6 +4,7 @@
   "type": "object",
   "required": ["mode", "watermark_threshold", "classifier_threshold", "classifier_min_chars", "verifier_origin"],
   "properties": {
+    "$schema": { "type": "string" },
     "mode": { "enum": ["block_on_detect", "provenance_required"] },
     "watermark_threshold": { "type": "number", "minimum": 0, "maximum": 1 },
     "classifier_threshold": { "type": "number", "minimum": 0.9, "maximum": 1 },
