@@ -1,0 +1,7 @@
+{
+  "name": "provenance-verifier",
+  "main": "src/index.js",
+  "compatibility_date": "2026-09-01",
+  "vars": { "ENABLE_ANTHROPIC": "false", "ENABLE_SYNTHID": "false", "ENABLE_OPENAI": "false", "BINOCULARS_URL": "" }
+  // secrets: ANTHROPIC_API_KEY, GOOGLE_API_KEY, OPENAI_API_KEY (wrangler secret put)
+}

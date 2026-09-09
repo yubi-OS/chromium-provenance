@@ -1,0 +1,11 @@
+# Copyright 2026 The yubi-OS Authors. BSD-3-Clause.
+static_library("provenance_gate") {
+  sources = [ "policy.cc", "policy.h" ]
+  deps = [ "//base" ]
+}
+
+source_set("unit_tests") {
+  testonly = true
+  sources = [ "policy_unittest.cc" ]
+  deps = [ ":provenance_gate", "//testing/gtest" ]
+}

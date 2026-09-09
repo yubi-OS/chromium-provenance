@@ -1,0 +1,18 @@
+{
+  "$schema": "./schema.json",
+  "mode": "block_on_detect",
+  "watermark_threshold": 0.5,
+  "classifier_threshold": 0.98,
+  "classifier_min_chars": 800,
+  "verifier_origin": "https://verifier.provenance.yubi-os.example",
+  "send_from_incognito": false,
+  "per_origin_mode": {},
+  "adapters": {
+    "c2pa": { "enabled": true, "runs": "in_process" },
+    "trustmark": { "enabled": true, "runs": "in_process" },
+    "anthropic_watermark": { "enabled": false, "runs": "verifier", "note": "private-preview API; enable once yubi-OS access is granted" },
+    "synthid": { "enabled": false, "runs": "verifier", "note": "Google Cloud AI Content Detection API" },
+    "openai_provenance": { "enabled": false, "runs": "verifier" },
+    "binoculars": { "enabled": false, "runs": "verifier", "note": "needs GPU backend + measured FPR before default-on (CONSTRAINTS #6)" }
+  }
+}

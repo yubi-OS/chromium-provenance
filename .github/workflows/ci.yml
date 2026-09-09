@@ -1,0 +1,27 @@
+name: ci
+on:
+  push: { branches: [main] }
+  pull_request:
+  workflow_dispatch:
+permissions: { contents: read }
+jobs:
+  policy-engine:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: Build + run policy tests (standalone, no Chromium checkout)
+        run: |
+          g++ -std=c++20 -Wall -Wextra -Werror -DSTANDALONE_TEST -I. \
+            components/provenance_gate/policy.cc components/provenance_gate/policy_unittest.cc -o /tmp/policy_test
+          /tmp/policy_test
+      - name: Validate policy JSON against schema
+        run: |
+          python3 -m pip install --quiet jsonschema || python3 -m pip install --quiet --break-system-packages jsonschema
+          python3 -c "import json,jsonschema; jsonschema.validate(json.load(open('policy/default.json')), json.load(open('policy/schema.json'))); print('policy/default.json OK')"
+  verifier:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: cd verifier && npm test

@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "provenance_gate policy",
+  "type": "object",
+  "required": ["mode", "watermark_threshold", "classifier_threshold", "classifier_min_chars", "verifier_origin"],
+  "properties": {
+    "mode": { "enum": ["block_on_detect", "provenance_required"] },
+    "watermark_threshold": { "type": "number", "minimum": 0, "maximum": 1 },
+    "classifier_threshold": { "type": "number", "minimum": 0.9, "maximum": 1 },
+    "classifier_min_chars": { "type": "integer", "minimum": 800 },
+    "verifier_origin": { "type": "string", "format": "uri" },
+    "send_from_incognito": { "type": "boolean" },
+    "per_origin_mode": { "type": "object", "additionalProperties": { "enum": ["block_on_detect", "provenance_required", "allow"] } },
+    "adapters": { "type": "object" }
+  },
+  "additionalProperties": false
+}
