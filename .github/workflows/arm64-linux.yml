@@ -48,28 +48,6 @@ jobs:
             curl --max-time 5 -sS -o /dev/null -w 'LOCAL_BRIDGE_HTTP=%{http_code}\n' http://127.0.0.1:8080/run || true
             tailscale debug prefs | python3 -c 'import json,sys; j=json.load(sys.stdin); print("OperatorUser:",j.get("OperatorUser")); print("RunSSH:",j.get("RunSSH"))' || true
           } 2>&1 | tee evidence/bridge-transport.txt
-      - name: Inspect filtered Tailscale TLS journal
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 - <<'PY' | tee evidence/tailscale-tls.txt
-          import datetime,json,re,subprocess
-          print('TLS_DIAGNOSTICS_AT',datetime.datetime.now(datetime.timezone.utc).isoformat())
-          r=subprocess.run(['journalctl','-u','tailscaled','--since','2026-09-24 19:45:00 UTC','--until','2026-09-24 20:15:00 UTC','--no-pager','-o','json','-n','1000'],capture_output=True,text=True,timeout=15)
-          print('JOURNAL_EXIT',r.returncode)
-          print('JOURNAL_ACCESS',r.stderr[:1000])
-          rows=[]
-          for line in r.stdout.splitlines():
-           try: row=json.loads(line)
-           except ValueError: continue
-           msg=row.get('MESSAGE','')
-           if re.search(r'tls|handshake|certificate|cert:|funnel|serve:|ingress',msg,re.I):
-            msg=re.sub(r'https?://[^\s]+','[URL redacted]',msg)
-            msg=re.sub(r'(?i)(bearer\s+|tskey-[a-z]+-)[A-Za-z0-9_.-]+','[credential redacted]',msg)
-            rows.append({'time_us':row.get('__REALTIME_TIMESTAMP'),'message':msg[:1800]})
-          print('MATCHED_TLS_ROWS',len(rows))
-          for row in rows[-100:]: print(json.dumps(row))
-          PY
       - name: Check host prerequisites
         shell: bash
         run: |
