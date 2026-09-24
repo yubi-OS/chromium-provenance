@@ -38,6 +38,16 @@ jobs:
             if sudo -n true; then echo SUDO_AVAILABLE; else echo NO_PASSWORDLESS_SUDO; fi
           } | tee evidence/host.txt
           test "$(uname -m)" = aarch64
+      - name: Inspect bridge and Funnel transport
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            tailscale funnel status --json || true
+            systemctl show shell-bridge.service -p User -p ActiveState -p SubState -p MainPID || true
+            curl --max-time 5 -sS -o /dev/null -w 'LOCAL_BRIDGE_HTTP=%{http_code}\n' http://127.0.0.1:8080/run || true
+            tailscale debug prefs | python3 -c 'import json,sys; j=json.load(sys.stdin); print("OperatorUser:",j.get("OperatorUser")); print("RunSSH:",j.get("RunSSH"))' || true
+          } 2>&1 | tee evidence/bridge-transport.txt
       - name: Check host prerequisites
         shell: bash
         run: |
