@@ -1,6 +1,16 @@
 # Linux ARM64 build lane
 
-## Current evidence, 2026-09-09
+## Latest verified status, 2026-09-24
+
+[ARM64 qualification run 36053621319](https://github.com/yubi-OS/chromium-provenance/actions/runs/36053621319) is green on org runner `ubuntu` (HIGH-MEM), overlay `6d9ebdb6ba1af140ea99e96a21088bda3f2ff3cb`. Native policy tests pass; the executable is ELF AArch64. All 4 verifier tests pass. [Evidence artifact](https://github.com/yubi-OS/chromium-provenance/actions/runs/36053621319/artifacts/10831830946).
+
+Host packages were installed through the authenticated root shell bridge using the hash-verified installer from `839369e2`: clang/LLD 21.1.8, CMake 4.2.3, Ninja 1.13.2, pkg-config 2.5.1, Node 22.22.1, npm 9.2.0. Existing Rust is 1.93.1. Installer exited 0, executable prerequisite check passes, about 180 GiB free disk remains. No sudoers or persistent runner-privilege changes. Installation evidence is on the host under `/var/lib/chromium-provision/` (`bootstrap.sh`, `install.log`, `exit-code`), unit `chromium-host-deps-20260924`.
+
+Ubuntu public Funnel TLS returned 525 while private-tailnet HTTPS worked. After the operator restarted tailscaled, root commands succeeded (one transient 525 remained before subsequent successful requests). The exact TLS cause was not proven. The installer ran as a separate systemd oneshot so the single-threaded HTTP bridge could still answer status queries. The launch request timed out; checking the unit and log confirmed it continued, so it was not relaunched.
+
+**Scope:** this is host qualification, standalone C++ policy and verifier scaffold testing. Chromium source sync, native Chromium toolchain compatibility, a full browser binary and browser-level AI filtering remain pending. Installed distribution compiler versions are not proof of compatibility with Chromium 153.
+
+## Initial qualification, 2026-09-09
 
 Runner `ubuntu` (org runner id 22): labels `self-hosted`, `Linux`, `ARM64`, `HIGH-MEM`. The machine reports Ubuntu 26.04.1, 12 CPUs, 62 GiB RAM, 8 GiB swap, 188 GiB available disk. Hardware is available; build duration is unmeasured. The earlier 32-core estimate was a sizing suggestion, not a minimum requirement.
 
@@ -22,7 +32,7 @@ On HIGH-MEM, use the overlay checkout already created by qualification:
 sudo bash /home/ubuntu/actions-runner/_work/chromium-provenance/chromium-provenance/scripts/bootstrap-arm64-host.sh --install
 ```
 
-First update that checkout to the reviewed commit containing the script (or download the script at that immutable commit). The installer uses the host's existing apt repositories, installs build/runtime development packages, and checks the resulting executables. It neither changes sudoers nor grants unattended root access. Package installation and availability on this host remain unverified until this command actually runs.
+First update that checkout to the reviewed commit containing the script (or download the script at that immutable commit). The installer uses the host's existing apt repositories, installs build/runtime development packages, and checks the resulting executables. It neither changes sudoers nor grants unattended root access. This setup was completed on 2026-09-24; see the latest verified status above.
 
 ## Native toolchain work after provisioning
 
