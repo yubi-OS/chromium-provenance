@@ -1,0 +1,87 @@
+name: Chromium ARM64 sync and GN
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: chromium-high-mem
+  cancel-in-progress: false
+
+jobs:
+  sync-and-gn:
+    if: github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, Linux, ARM64, HIGH-MEM]
+    timeout-minutes: 330
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Prepare build dir and evidence
+        run: |
+          set -euo pipefail
+          mkdir -p evidence /home/ubuntu/chromium-build
+          df -h /home/ubuntu | tee evidence/disk-before.txt
+      - name: Install depot_tools
+        run: |
+          set -euo pipefail
+          if [ ! -d /home/ubuntu/chromium-build/depot_tools/.git ]; then
+            git clone --depth 1 https://chromium.googlesource.com/chromium/tools/depot_tools.git /home/ubuntu/chromium-build/depot_tools
+          else
+            git -C /home/ubuntu/chromium-build/depot_tools pull --ff-only
+          fi
+      - name: gclient config
+        working-directory: /home/ubuntu/chromium-build
+        run: |
+          set -euo pipefail
+          export PATH="$PWD/depot_tools:$PATH"
+          if [ ! -f .gclient ]; then
+            gclient config --name=src https://chromium.googlesource.com/chromium/src.git --unmanaged
+          fi
+          cat .gclient | tee "$GITHUB_WORKSPACE/evidence/gclient-config.txt"
+      - name: Sync pinned revision without hooks
+        working-directory: /home/ubuntu/chromium-build
+        timeout-minutes: 300
+        run: |
+          set -euo pipefail
+          export PATH="$PWD/depot_tools:$PATH"
+          gclient sync --revision src@507c6ee3e2f3b2ca0e660547e5b9ea4820c67f4c --nohooks --no-history 2>&1 | tail -40 | tee "$GITHUB_WORKSPACE/evidence/sync-tail.txt"
+          git -C src rev-parse HEAD | tee "$GITHUB_WORKSPACE/evidence/src-head.txt"
+          git -C src rev-parse HEAD | grep -q '^507c6ee3e2f3b2ca0e660547e5b9ea4820c67f4c$'
+      - name: Record resource state after sync
+        run: |
+          set -euo pipefail
+          { date -u +%FT%TZ; nproc; free -h; df -h /home/ubuntu; du -sh /home/ubuntu/chromium-build/src 2>/dev/null || true; } | tee evidence/resources-after-sync.txt
+      - name: Bootstrap native GN
+        working-directory: /home/ubuntu/chromium-build/src
+        timeout-minutes: 60
+        run: |
+          set -euo pipefail
+          python3 tools/gn/bootstrap/bootstrap.py --no-clean 2>&1 | tail -30 | tee "$GITHUB_WORKSPACE/evidence/gn-bootstrap.txt"
+          test -x out/gn
+      - name: gn gen with system clang
+        working-directory: /home/ubuntu/chromium-build/src
+        run: |
+          set -euo pipefail
+          cat > ../gn-args.gn <<'EOF'
+          is_debug = false
+          is_component_build = true
+          symbol_level = 0
+          blink_symbol_level = 0
+          v8_symbol_level = 0
+          clang_base_path = "/usr"
+          clang_use_chrome_plugins = false
+          treat_warnings_as_errors = false
+          EOF
+          ARGS=$(tr '\n' ' ' < ../gn-args.gn)
+          ./out/gn gen out/arm64-qual --args="$ARGS" 2>&1 | tee "$GITHUB_WORKSPACE/evidence/gn-gen.txt"
+      - name: Upload sync evidence
+        if: always()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
+        with:
+          name: arm64-sync
+          path: evidence/
+          retention-days: 7
+          if-no-files-found: error
