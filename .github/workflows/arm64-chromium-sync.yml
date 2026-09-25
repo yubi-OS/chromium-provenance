@@ -14,7 +14,7 @@ jobs:
   sync-and-gn:
     if: github.ref == 'refs/heads/main'
     runs-on: [self-hosted, Linux, ARM64, HIGH-MEM]
-    timeout-minutes: 330
+    timeout-minutes: 480
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -43,11 +43,11 @@ jobs:
           cat .gclient | tee "$GITHUB_WORKSPACE/evidence/gclient-config.txt"
       - name: Sync pinned revision without hooks
         working-directory: /home/ubuntu/chromium-build
-        timeout-minutes: 300
+        timeout-minutes: 450
         run: |
           set -euo pipefail
           export PATH="$PWD/depot_tools:$PATH"
-          gclient sync --revision src@507c6ee3e2f3b2ca0e660547e5b9ea4820c67f4c --nohooks --no-history 2>&1 | tail -40 | tee "$GITHUB_WORKSPACE/evidence/sync-tail.txt"
+          nice -n 19 ionice -c3 gclient sync --revision src@507c6ee3e2f3b2ca0e660547e5b9ea4820c67f4c --nohooks --no-history --jobs 4 2>&1 | tail -40 | tee "$GITHUB_WORKSPACE/evidence/sync-tail.txt"
           git -C src rev-parse HEAD | tee "$GITHUB_WORKSPACE/evidence/src-head.txt"
           git -C src rev-parse HEAD | grep -q '^507c6ee3e2f3b2ca0e660547e5b9ea4820c67f4c$'
       - name: Record resource state after sync
@@ -59,7 +59,7 @@ jobs:
         timeout-minutes: 60
         run: |
           set -euo pipefail
-          python3 tools/gn/bootstrap/bootstrap.py --no-clean 2>&1 | tail -30 | tee "$GITHUB_WORKSPACE/evidence/gn-bootstrap.txt"
+          nice -n 19 ionice -c2 -n7 python3 tools/gn/bootstrap/bootstrap.py --no-clean 2>&1 | tail -30 | tee "$GITHUB_WORKSPACE/evidence/gn-bootstrap.txt"
           test -x out/gn
       - name: gn gen with system clang
         working-directory: /home/ubuntu/chromium-build/src
