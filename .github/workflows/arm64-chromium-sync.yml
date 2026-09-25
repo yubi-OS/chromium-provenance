@@ -68,6 +68,7 @@ jobs:
         working-directory: /home/ubuntu/chromium-build/src
         run: |
           set -euo pipefail
+          git log -1 --format=%ct > build/util/LASTCHANGE.committime
           cat > ../gn-args.gn <<'EOF'
           is_debug = false
           is_component_build = true
