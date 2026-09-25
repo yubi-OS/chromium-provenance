@@ -54,13 +54,16 @@ jobs:
         run: |
           set -euo pipefail
           { date -u +%FT%TZ; nproc; free -h; df -h /home/ubuntu; du -sh /home/ubuntu/chromium-build/src 2>/dev/null || true; } | tee evidence/resources-after-sync.txt
-      - name: Bootstrap native GN
-        working-directory: /home/ubuntu/chromium-build/src
-        timeout-minutes: 60
+      - name: Fetch prebuilt gn (CIPD linux-arm64)
+        working-directory: /home/ubuntu/chromium-build
         run: |
           set -euo pipefail
-          nice -n 19 ionice -c2 -n7 python3 tools/gn/bootstrap/bootstrap.py 2>&1 | tail -30 | tee "$GITHUB_WORKSPACE/evidence/gn-bootstrap.txt"
-          test -x out/gn
+          export PATH="$PWD/depot_tools:$PATH"
+          echo "gn/gn/linux-arm64 NiNl49qPQkD69P3Ou9yieBc5pI9WN5v0Vso_IW0ySCwC" > gn.ensure
+          cipd ensure -root gn-cipd -ensure-file gn.ensure 2>&1 | tail -3 | tee "$GITHUB_WORKSPACE/evidence/gn-cipd.txt"
+          file gn-cipd/gn | tee "$GITHUB_WORKSPACE/evidence/gn-elf.txt"
+          gn-cipd/gn --version | tee -a "$GITHUB_WORKSPACE/evidence/gn-elf.txt"
+          test -x gn-cipd/gn
       - name: gn gen with system clang
         working-directory: /home/ubuntu/chromium-build/src
         run: |
@@ -76,7 +79,7 @@ jobs:
           treat_warnings_as_errors = false
           EOF
           ARGS=$(tr '\n' ' ' < ../gn-args.gn)
-          ./out/gn gen out/arm64-qual --args="$ARGS" 2>&1 | tee "$GITHUB_WORKSPACE/evidence/gn-gen.txt"
+          ../gn-cipd/gn gen out/arm64-qual --args="$ARGS" 2>&1 | tee "$GITHUB_WORKSPACE/evidence/gn-gen.txt"
       - name: Upload sync evidence
         if: always()
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
