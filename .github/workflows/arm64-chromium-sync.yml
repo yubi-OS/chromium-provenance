@@ -59,7 +59,7 @@ jobs:
         timeout-minutes: 60
         run: |
           set -euo pipefail
-          nice -n 19 ionice -c2 -n7 python3 tools/gn/bootstrap/bootstrap.py --no-clean 2>&1 | tail -30 | tee "$GITHUB_WORKSPACE/evidence/gn-bootstrap.txt"
+          nice -n 19 ionice -c2 -n7 python3 tools/gn/bootstrap/bootstrap.py 2>&1 | tail -30 | tee "$GITHUB_WORKSPACE/evidence/gn-bootstrap.txt"
           test -x out/gn
       - name: gn gen with system clang
         working-directory: /home/ubuntu/chromium-build/src
