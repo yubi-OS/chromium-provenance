@@ -56,3 +56,19 @@ Next gates, all pending:
 - [Clang build implementation](https://chromium.googlesource.com/chromium/src/+/507c6ee3e2f3b2ca0e660547e5b9ea4820c67f4c/tools/clang/scripts/build.py)
 - [Rust download selection](https://chromium.googlesource.com/chromium/src/+/507c6ee3e2f3b2ca0e660547e5b9ea4820c67f4c/tools/rust/update_rust.py)
 - [Custom Rust toolchain arguments](https://chromium.googlesource.com/chromium/src/+/507c6ee3e2f3b2ca0e660547e5b9ea4820c67f4c/build/config/rust.gni)
+
+## Toolchain gate closed, 2026-09-25
+
+[Run 36199519712](https://github.com/yubi-OS/chromium-provenance/actions/runs/36199519712) green end-to-end on HIGH-MEM at overlay 'e083b1bf': throttled sync, CIPD gn fetch, gn gen, evidence upload. Zero host halts.
+
+Three findings baked into the workflow:
+
+1. **Throttle (mandatory on this host)** — the hardware halts under high I/O (user-reported; two syncs died this way before the fix). All heavy steps run under `nice -n 19`; the sync uses `ionice -c3` (idle class) and `gclient sync --jobs 4` (default is 32). Result: 27 GB tree synced in ~5 min with no halt. Keep this pattern for every future build step on the box.
+2. **GN comes from CIPD, not bootstrap** — at pin '507c6ee3' (153.0.8010.36) `tools/gn/build/gen.py` does not exist; `tools/gn/bootstrap/bootstrap.py` is leftover dead code. Workflow fetches `gn/gn/linux-arm64` pinned to instance `NiNl49qPQkD69P3Ou9yieBc5pI9WN5v0Vso_IW0ySCwC` (verified ELF aarch64, gn 2577).
+3. **LASTCHANGE.committime** — `compute_build_timestamp.py` needs `build/util/LASTCHANGE.committime`, produced by the `lastchange` hook that '--nohooks' skips. The workflow derives it from HEAD commit time.
+
+**CIPD linux-arm64 gap:** four `${{platform}}` packages have no linux-arm64 variant at this pin: gperf (`infra/3pp/tools/gperf`), reclient (`infra/rbe/client`), android_toolchain, fuchsia sdk core. DEPS on the build box is patched to their linux-amd64 variants with `git update-index --assume-unchanged DEPS` (keeps gclient's dirty-tree guard green). Re-apply on any fresh checkout.
+
+**gn gen result** (system clang 21.1.8, `clang_base_path=/usr`, component build, symbols off): `Done. Made 32194 targets from 5017 files in 3077ms`. Build directory: `/home/ubuntu/chromium-build/src/out/arm64-qual`.
+
+**Next gate:** throttled native build — `ninja -C out/arm64-qual content_shell` first, then `chrome`; measure duration, then provenance-gate patches.
