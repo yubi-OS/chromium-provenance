@@ -72,3 +72,18 @@ Three findings baked into the workflow:
 **gn gen result** (system clang 21.1.8, `clang_base_path=/usr`, component build, symbols off): `Done. Made 32194 targets from 5017 files in 3077ms`. Build directory: `/home/ubuntu/chromium-build/src/out/arm64-qual`.
 
 **Next gate:** throttled native build — `ninja -C out/arm64-qual content_shell` first, then `chrome`; measure duration, then provenance-gate patches.
+
+
+## Build gate progress, 2026-09-26
+
+`arm64-chromium-build.yml` (commit `e94f8049`) runs throttled `ninja -C out/arm64-qual content_shell` on HIGH-MEM (manual dispatch, same `chromium-high-mem` concurrency group, evidence artifact on every outcome). Four fixes landed to get the pipeline executing; the current gate is crubit.
+
+1. **Bindgen libclang mismatch** — the first build died at `[17/42090]` because bindgen loaded the downloaded toolchain's libclang, which predates flags Chromium passes at this pin (`-fdiagnostics-show-inlining-chain`, `-fno-lifetime-dse`). Fix: `rust_bindgen_root` now points at the freshly built native clang-24 host toolchain (`third_party/rust-toolchain-intermediate/llvm-host-install`) with `bin/bindgen` staged there and a `bin/rustfmt` wrapper (native stage1-tools rustfmt, `LD_LIBRARY_PATH` to `stage1/lib` for `librustc_driver`). Failing action validated green.
+2. **Runner group repo membership** — dispatched runs sat queued because the `chromium-high-mem` runner group had no repositories selected. Fixed by the operator in the org settings (2026-09-26); first CI pickup immediately after. Include the repo when creating a restricted runner group.
+3. **Root-owned build files** — `build.ninja` was root-owned 0600 after an out-of-CI `gn gen`, failing CI with `loading 'build.ninja': Permission denied`. `chown -R ubuntu:ubuntu /home/ubuntu/chromium-build` repaired it. Rule: any manual tree work on HIGH-MEM runs as the `ubuntu` user (`sudo -u ubuntu`), never as root.
+4. **Split-metadata .rmeta companions** — the run failed at `[195/42073]` with `only metadata stub found for 'rlib' dependency 'proc_macro'`. The toolchain sysroot's aarch64 `libproc_macro-681e7cea8be22eb0.rlib` is a split-metadata stub whose companion was missing; the full pair exists in `third_party/rust-src/build/aarch64-unknown-linux-gnu/stage1-std/.../dist/build/proc_macro/681e7cea8be22eb0/out/`. Copied the companion `.rmeta` files (proc_macro, rustc_literal_escaper) next to the stubs in `third_party/rust-toolchain/lib/rustlib/aarch64-unknown-linux-gnu/lib/`. Validated green.
+5. **Crubit `cc_bindings_from_rs` is x86_64-only — current gate.** The next run reached `[418/41902]` (proc_macro2 green, local rustc sysroot std building) and failed on `OSError: Exec format error` for `third_party/rust-toolchain/bin/cc_bindings_from_rs` (x86_64 ELF). It generates `rs_core.h`/`rs_alloc.h`/`rs_std.h` under `enable_cpp_api_from_rust`, unconditionally on for chromium builds using the chromium rust toolchain. Forcing the flag off breaks `gn gen` (`font_format_bindings` unresolved under `//third_party/blink/renderer/platform`) — the flag-off graph is untested upstream at this pin, and crubit source is not vendored in the tree.
+
+Next-gate options: (a) build `cc_bindings_from_rs` from crubit source for aarch64, (b) patch the graph to drop `cpp_api_from_rust` (blink `font_format_bindings` plus every consumer — whack-a-mole risk), (c) source an upstream aarch64 crubit prebuilt.
+
+Attempt log (all on HIGH-MEM, pinned `507c6ee3`, overlay `e94f8049`): 36271046440 (Permission denied, fixed), 36271274831 (proc_macro stub, fixed), 36272127419 (cc_bindings_from_rs, current gate).
