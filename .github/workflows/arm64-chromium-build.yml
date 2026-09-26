@@ -1,0 +1,56 @@
+name: Chromium ARM64 build content_shell
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: chromium-high-mem
+  cancel-in-progress: false
+
+jobs:
+  build-content-shell:
+    if: github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, Linux, ARM64, HIGH-MEM]
+    timeout-minutes: 720
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Preflight persistent tree
+        run: |
+          set -euo pipefail
+          mkdir -p evidence
+          test -x /home/ubuntu/chromium-build/gn-cipd/gn
+          test -d /home/ubuntu/chromium-build/src/out/arm64-qual
+          git log -1 --format=%ct > /home/ubuntu/chromium-build/src/build/util/LASTCHANGE.committime
+          git -C /home/ubuntu/chromium-build/src rev-parse HEAD | tee evidence/src-head.txt
+          cp /home/ubuntu/chromium-build/src/out/arm64-qual/args.gn evidence/args.gn
+          df -h /home/ubuntu | tee evidence/disk-before.txt
+          /home/ubuntu/chromium-build/gn-cipd/gn --version | tee evidence/gn-version.txt
+
+      - name: ninja content_shell (throttled)
+        working-directory: /home/ubuntu/chromium-build/src
+        timeout-minutes: 700
+        run: |
+          set -euo pipefail
+          nice -n 19 ionice -c3 ninja -C out/arm64-qual -j 8 -l 10 content_shell 2>&1 | tee "$GITHUB_WORKSPACE/evidence/ninja-build.log" | tail -5
+
+      - name: ELF verify content_shell
+        run: |
+          set -euo pipefail
+          file /home/ubuntu/chromium-build/src/out/arm64-qual/content_shell | tee evidence/content-shell-elf.txt
+          file /home/ubuntu/chromium-build/src/out/arm64-qual/*.so | head -20 | tee -a evidence/content-shell-elf.txt
+          { date -u +%FT%TZ; free -h; df -h /home/ubuntu; } | tee evidence/resources-after.txt
+
+      - name: Upload build evidence
+        if: always()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
+        with:
+          name: arm64-content-shell
+          path: evidence/
+          retention-days: 7
+          if-no-files-found: error
