@@ -104,3 +104,11 @@ Fixes landed on HIGH-MEM to get here:
 Also fixed in `build_rust.py` (aarch64-native support): `RustTargetTriple` returns aarch64 on aarch64 and `VendorForStdlib` uses the system cargo (pre-existing patches), plus NEW: `DownloadDebianSysroot('amd64')` is now arch-aware (arm64 on aarch64 hosts) and `AddOpenSSLToEnv` is skipped on aarch64 (the 3pp package is linux-amd64 OpenSSL 1.1.1 — too old and wrong arch; the system OpenSSL 3.5.5 via pkg-config works).
 
 Result: the `rs_core.h` crubit generation target is GREEN on-box, and CI run 36290640690 is building the full content_shell graph. Failure-history during this stretch: E0514 (dev libs compiled by the stage0 beta — fixed by the full toolchain rebuild), E0463 `std` (sysroot gutted during the repair — restored), E0463 `quote`/`proc_macro2`/`syn` in the crubit support proc macros (status was being re-verified in CI run 36290640690), the bindgen-wipe (re-staged).
+
+## Build gate CLOSED, 2026-09-27
+
+Run 36326076738 GREEN at `18f54d12` (the ELF-verify SIGPIPE fix): content_shell built — `out/arm64-qual/content_shell`, 17.7 MB, `ELF 64-bit LSB ... ARM aarch64`. Smoke test (`--headless --no-sandbox --disable-gpu --dump-dom about:blank`): the browser starts and runs init but crashes on a `DCHECK` at `base/synchronization/lock_impl_posix.cc:90` (`rv == 0 || rv == EBUSY`, pthread_mutex_unlock EINVAL) — a runtime bug to chase (possibly the component build + the ARM64 host specifics), NOT a build blocker.
+
+Full toolchain-rebuild caveat (repeat of above, load-bearing): any `build_rust.py` re-install wipes the toolchain bin/ — re-stage bindgen (0.73.2, `~/.cargo/bin/bindgen`) + rustfmt (the native stage1-tools binary) into `llvm-host-install/bin/` afterward.
+
+Next phase: the provenance-gate patches SERIES 0001-0007 land in the tree.
