@@ -87,3 +87,20 @@ Three findings baked into the workflow:
 Next-gate options: (a) build `cc_bindings_from_rs` from crubit source for aarch64, (b) patch the graph to drop `cpp_api_from_rust` (blink `font_format_bindings` plus every consumer — whack-a-mole risk), (c) source an upstream aarch64 crubit prebuilt.
 
 Attempt log (all on HIGH-MEM, pinned `507c6ee3`, overlay `e94f8049`): 36271046440 (Permission denied, fixed), 36271274831 (proc_macro stub, fixed), 36272127419 (cc_bindings_from_rs, current gate).
+
+
+## Route (a) executed: native cc_bindings_from_rs, 2026-09-26/27
+
+`cc_bindings_from_rs` is a pure-Rust cargo binary (crubit's Bazel/LLVM weight is only for the reverse-direction `rs_bindings_from_cc`), so it builds natively on the aarch64 host. Route (c) — an upstream prebuilt — was ruled out first: crubit publishes no release binaries and its CI is x86_64-only, no distro packages it on any arch, and Chromium's toolchain CIPD has no `Linux_arm64` variant at the pin or on main. Full survey: `refs/cc-bindings-from-rs-aarch64-2026-09-26.md` on `yubi-OS/yubiOS` (commit `71e8c6da`).
+
+Fixes landed on HIGH-MEM to get here:
+
+1. **bindgen → native clang-24 toolchain**: `rust_bindgen_root` repointed at `third_party/rust-toolchain-intermediate/llvm-host-install`, with `bin/bindgen` (0.73.2 aarch64) staged there + a `bin/rustfmt` wrapper.
+2. **Split-metadata `.rmeta` companions**: the sysroot's `libproc_macro-681e7cea8be22eb0.rlib` was a stub without its companion; copied the `.rmeta` from the stage1-std dist (same hash).
+3. **The consistent toolchain rebuild**: the installed toolchain was piecemeal (aarch64 rustc/cargo swapped into an x86_64 package) and had NO rustc-dev at all. Fixed by a full `build_rust.py --skip-checkout` (build + `x.py install --stage 2`): the extended install ships rustc-dev + std + cargo/clippy/rustfmt/rust-analyzer, all self-compiled by the pinned nightly (`0913b18e`). **Caveat: the install wipes the toolchain `bin/` — RE-STAGE bindgen + rustfmt into `llvm-host-install/bin/` after any toolchain re-install** (they are not part of the installer's component set).
+4. **build_crubit.py green**: `cc_bindings_from_rs` compiled + installed into the toolchain (aarch64 ELF), with `crubit/support` + the gn files at `lib/third_party/crubit/`.
+5. **Runtime fixes for the generated bindings**: `librustc_driver-8cdff714e4d6ff45.so` installed (the toolchain lib only had `c6de4f5a`/`d48c6bde`), and `buildtools/linux64-format/clang-format` swapped for the aarch64 build (the x86_64 one kept as `clang-format.x64`).
+
+Also fixed in `build_rust.py` (aarch64-native support): `RustTargetTriple` returns aarch64 on aarch64 and `VendorForStdlib` uses the system cargo (pre-existing patches), plus NEW: `DownloadDebianSysroot('amd64')` is now arch-aware (arm64 on aarch64 hosts) and `AddOpenSSLToEnv` is skipped on aarch64 (the 3pp package is linux-amd64 OpenSSL 1.1.1 — too old and wrong arch; the system OpenSSL 3.5.5 via pkg-config works).
+
+Result: the `rs_core.h` crubit generation target is GREEN on-box, and CI run 36290640690 is building the full content_shell graph. Failure-history during this stretch: E0514 (dev libs compiled by the stage0 beta — fixed by the full toolchain rebuild), E0463 `std` (sysroot gutted during the repair — restored), E0463 `quote`/`proc_macro2`/`syn` in the crubit support proc macros (status was being re-verified in CI run 36290640690), the bindgen-wipe (re-staged).
