@@ -43,7 +43,9 @@ jobs:
         run: |
           set -euo pipefail
           file /home/ubuntu/chromium-build/src/out/arm64-qual/content_shell | tee evidence/content-shell-elf.txt
-          file /home/ubuntu/chromium-build/src/out/arm64-qual/*.so | head -20 | tee -a evidence/content-shell-elf.txt
+          # no `head` pipe here: SIGPIPE from `file` fails this step under pipefail
+          file /home/ubuntu/chromium-build/src/out/arm64-qual/*.so | tee -a evidence/content-shell-elf.txt
+          grep -q 'ARM aarch64' evidence/content-shell-elf.txt
           { date -u +%FT%TZ; free -h; df -h /home/ubuntu; } | tee evidence/resources-after.txt
 
       - name: Upload build evidence
