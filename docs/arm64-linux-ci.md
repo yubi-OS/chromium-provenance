@@ -122,3 +122,8 @@ content_shell runs. Two findings:
 3. **Known limitation**: `--dump-dom about:blank` did not complete within 240s across three attempts (the browser idles after startup; the dbus fast-fail env `DBUS_*_BUS_ADDRESS=/dev/null` shortened startup but the dump never fired). Debugging the navigation pipeline is separate follow-up work.
 
 Next phase: the provenance-gate patches SERIES 0001-0007.
+
+
+## Puppeteer screenshot validated, 2026-09-28
+
+`content_shell --ozone-platform=headless --remote-debugging-port=9222` + `puppeteer-core` (npm, 25 packages) connected over the DevTools protocol: `page.goto('https://example.com')` → `page.screenshot()` → a valid 1280×800 PNG (19.4 KB) showing the fully rendered page (title, text, link, correct fonts/spacing). The network stack, HTML parsing, CSS layout, and text rendering all work end-to-end on the aarch64 build. Test harness: `/home/ubuntu/pptr-test/shot.js` on HIGH-MEM. This closes the runtime validation loop for the build; provenance-gate patches are the next phase.
