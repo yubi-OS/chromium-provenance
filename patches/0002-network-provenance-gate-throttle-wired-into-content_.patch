@@ -1,0 +1,151 @@
+From 71168f9b070071d19851809688a142f471f6cc76 Mon Sep 17 00:00:00 2001
+From: OMNI-AGENT <foil-copy-overrate@duck.com>
+Date: Mon, 28 Sep 2026 00:57:37 -0700
+Subject: [PATCH 2/2] network: provenance gate throttle wired into
+ content_shell
+
+ProvenanceGateThrottle (blink::URLLoaderThrottle) evaluates the
+provenance policy on main-frame loads; detector adapters (Series 0007)
+supply Evidence, until then Mode A allows everything with the decision
+logged at VLOG(1) (verified: provenance_gate: url=https://example.com/
+allow=1 reason=no_signal).
+
+Series 0002 of 7. Adapted from SERIES.md chrome/browser row to
+content_shell for the testable build; the chrome wiring lands with the
+chrome port.
+---
+ content/shell/BUILD.gn                        |  3 ++
+ .../shell/browser/provenance_gate_throttle.cc | 34 +++++++++++++++++++
+ .../shell/browser/provenance_gate_throttle.h  | 34 +++++++++++++++++++
+ .../browser/shell_content_browser_client.cc   |  5 +++
+ 4 files changed, 76 insertions(+)
+ create mode 100644 content/shell/browser/provenance_gate_throttle.cc
+ create mode 100644 content/shell/browser/provenance_gate_throttle.h
+
+diff --git a/content/shell/BUILD.gn b/content/shell/BUILD.gn
+index ea8664f6ba..c391625d82 100644
+--- a/content/shell/BUILD.gn
++++ b/content/shell/BUILD.gn
+@@ -189,6 +189,8 @@ static_library("content_shell_lib") {
+     "browser/shell_browser_main_parts.cc",
+     "browser/shell_browser_main_parts.h",
+     "browser/shell_content_browser_client.cc",
++      "browser/provenance_gate_throttle.h",
++      "browser/provenance_gate_throttle.cc",
+     "browser/shell_content_browser_client.h",
+     "browser/shell_content_index_provider.cc",
+     "browser/shell_content_index_provider.h",
+@@ -309,6 +311,7 @@ static_library("content_shell_lib") {
+   }
+ 
+   public_deps = [
++      "//components/provenance_gate",
+     ":android_shell_descriptors",
+ 
+     # content_shell_lib also exposes all public content APIs.
+diff --git a/content/shell/browser/provenance_gate_throttle.cc b/content/shell/browser/provenance_gate_throttle.cc
+new file mode 100644
+index 0000000000..dce293fa3f
+--- /dev/null
++++ b/content/shell/browser/provenance_gate_throttle.cc
+@@ -0,0 +1,34 @@
++// Copyright 2026 The yubi-OS Authors. BSD-3-Clause (matches Chromium).
++#include "content/shell/browser/provenance_gate_throttle.h"
++
++#include "base/logging.h"
++#include "url/gurl.h"
++
++namespace content {
++
++ProvenanceGateThrottle::ProvenanceGateThrottle(
++    const provenance_gate::Policy& policy)
++    : policy_(policy) {}
++
++ProvenanceGateThrottle::~ProvenanceGateThrottle() = default;
++
++void ProvenanceGateThrottle::DetachFromCurrentSequence() {}
++
++void ProvenanceGateThrottle::WillProcessResponse(
++    const GURL& response_url,
++    network::mojom::URLResponseHead* response_head,
++    bool* defer) {
++  // Series 0002: the gate wiring. Detector adapters (Series 0007) supply
++  // Evidence; until they exist the engine sees no evidence and Mode A
++  // allows everything. Log the evaluation so the wiring is observable via
++  // --enable-logging --v=1.
++  std::vector<provenance_gate::Evidence> evidence;
++  const auto decision = provenance_gate::Evaluate(policy_, evidence);
++  VLOG(1) << "provenance_gate: url=" << response_url.spec()
++          << " allow=" << decision.allow
++          << " reason=" << decision.reason;
++  // Blocked handling (defer/interstitial) lands with Series 0003; the
++  // detector adapters that can produce a block land with Series 0007.
++}
++
++}  // namespace content
+diff --git a/content/shell/browser/provenance_gate_throttle.h b/content/shell/browser/provenance_gate_throttle.h
+new file mode 100644
+index 0000000000..664d4c4680
+--- /dev/null
++++ b/content/shell/browser/provenance_gate_throttle.h
+@@ -0,0 +1,34 @@
++// Copyright 2026 The yubi-OS Authors. BSD-3-Clause (matches Chromium).
++#ifndef CONTENT_SHELL_BROWSER_PROVENANCE_GATE_THROTTLE_H_
++#define CONTENT_SHELL_BROWSER_PROVENANCE_GATE_THROTTLE_H_
++
++#include "base/memory/raw_ptr.h"
++#include "components/provenance_gate/policy.h"
++#include "third_party/blink/public/common/loader/url_loader_throttle.h"
++
++namespace content {
++
++// Series 0002: main-frame provenance gate. Evaluates the provenance policy
++// on main-frame HTML responses and (in a follow-up series) on subresources.
++// Detector adapters (Series 0007) supply Evidence; until they exist the
++// engine sees no evidence and Mode A allows everything, which keeps this
++// wiring observable via --enable-logging without changing behavior.
++class ProvenanceGateThrottle : public blink::URLLoaderThrottle {
++ public:
++  explicit ProvenanceGateThrottle(const provenance_gate::Policy& policy);
++  ~ProvenanceGateThrottle() override;
++
++  // blink::URLLoaderThrottle:
++  void DetachFromCurrentSequence() override;
++  void WillProcessResponse(
++      const GURL& response_url,
++      network::mojom::URLResponseHead* response_head,
++      bool* defer) override;
++
++ private:
++  provenance_gate::Policy policy_;
++};
++
++}  // namespace content
++
++#endif  // CONTENT_SHELL_BROWSER_PROVENANCE_GATE_THROTTLE_H_
+diff --git a/content/shell/browser/shell_content_browser_client.cc b/content/shell/browser/shell_content_browser_client.cc
+index 1f730d3e77..c8b7c0efd6 100644
+--- a/content/shell/browser/shell_content_browser_client.cc
++++ b/content/shell/browser/shell_content_browser_client.cc
+@@ -4,6 +4,8 @@
+ 
+ #include "content/shell/browser/shell_content_browser_client.h"
+ 
++#include "content/shell/browser/provenance_gate_throttle.h"
++
+ #include <stddef.h>
+ 
+ #include <functional>
+@@ -415,6 +417,9 @@ ShellContentBrowserClient::CreateURLLoaderThrottles(
+         std::make_unique<custom_handlers::ProtocolHandlerThrottle>(*factory));
+   }
+ 
++  result.push_back(std::make_unique<ProvenanceGateThrottle>(
++      provenance_gate::Policy{}));
++
+   return result;
+ }
+ 
+-- 
+2.53.0
+

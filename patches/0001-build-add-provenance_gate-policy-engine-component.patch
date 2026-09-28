@@ -1,0 +1,333 @@
+From c7ac21abe2711f53669a75985dc146f535accd6a Mon Sep 17 00:00:00 2001
+From: OMNI-AGENT <foil-copy-overrate@duck.com>
+Date: Mon, 28 Sep 2026 00:40:55 -0700
+Subject: [PATCH 1/2] build: add provenance_gate policy engine component
+
+Pure-function policy engine (Evaluate) for the provenance gate:
+- Mode A (block_on_detect): render unless a detector fires; verifier-down fails open
+- Mode B (provenance_required): trusted C2PA manifest required, fail-closed
+- Classifier-only blocks need >=800 chars + >=0.98 confidence and stay user-overridable
+
+12 unit tests, dual-build: chromium gtest AND standalone (-DSTANDALONE_TEST).
+
+Series 0001 of 7. See patches/SERIES.md on yubi-OS/chromium-provenance.
+---
+ components/provenance_gate/BUILD.gn           |  11 ++
+ components/provenance_gate/README.md          |   5 +
+ components/provenance_gate/policy.cc          |  98 ++++++++++++++++
+ components/provenance_gate/policy.h           |  55 +++++++++
+ components/provenance_gate/policy_unittest.cc | 105 ++++++++++++++++++
+ 5 files changed, 274 insertions(+)
+ create mode 100644 components/provenance_gate/BUILD.gn
+ create mode 100644 components/provenance_gate/README.md
+ create mode 100644 components/provenance_gate/policy.cc
+ create mode 100644 components/provenance_gate/policy.h
+ create mode 100644 components/provenance_gate/policy_unittest.cc
+
+diff --git a/components/provenance_gate/BUILD.gn b/components/provenance_gate/BUILD.gn
+new file mode 100644
+index 0000000000..9b9bcde514
+--- /dev/null
++++ b/components/provenance_gate/BUILD.gn
+@@ -0,0 +1,11 @@
++# Copyright 2026 The yubi-OS Authors. BSD-3-Clause.
++static_library("provenance_gate") {
++  sources = [ "policy.cc", "policy.h" ]
++  deps = [ "//base" ]
++}
++
++source_set("unit_tests") {
++  testonly = true
++  sources = [ "policy_unittest.cc" ]
++  deps = [ ":provenance_gate", "//testing/gtest" ]
++}
+diff --git a/components/provenance_gate/README.md b/components/provenance_gate/README.md
+new file mode 100644
+index 0000000000..2fae01a161
+--- /dev/null
++++ b/components/provenance_gate/README.md
+@@ -0,0 +1,5 @@
++# components/provenance_gate
++
++Pure policy engine. Adapters (c2pa-rs, TrustMark, remote verifier client) produce `Evidence`; `Evaluate()` returns a `Decision` the interstitial renders. Wiring into `URLLoaderThrottle` and `security_interstitials` lands in `patches/0002` and `0003`.
++
++Standalone test: `g++ -std=c++20 -DSTANDALONE_TEST -I. components/provenance_gate/policy.cc components/provenance_gate/policy_unittest.cc -o /tmp/t && /tmp/t`
+diff --git a/components/provenance_gate/policy.cc b/components/provenance_gate/policy.cc
+new file mode 100644
+index 0000000000..e99516e6ea
+--- /dev/null
++++ b/components/provenance_gate/policy.cc
+@@ -0,0 +1,98 @@
++// Copyright 2026 The yubi-OS Authors. BSD-3-Clause (matches Chromium).
++#include "components/provenance_gate/policy.h"
++
++namespace provenance_gate {
++
++namespace {
++
++Decision Block(const Evidence& e, const char* reason, bool overridable) {
++  Decision d;
++  d.allow = false;
++  d.overridable = overridable;
++  d.signal = e.signal;
++  d.confidence = e.confidence;
++  d.source = e.source;
++  d.reason = reason;
++  return d;
++}
++
++}  // namespace
++
++const char* SignalName(Signal s) {
++  switch (s) {
++    case Signal::kNone: return "none";
++    case Signal::kC2paValidNoAiAction: return "c2pa_valid_no_ai_action";
++    case Signal::kC2paValidAiAction: return "c2pa_valid_ai_action";
++    case Signal::kC2paInvalid: return "c2pa_invalid";
++    case Signal::kWatermarkDetected: return "watermark_detected";
++    case Signal::kClassifierPositive: return "classifier_positive";
++    case Signal::kVerifierUnavailable: return "verifier_unavailable";
++  }
++  return "unknown";
++}
++
++Decision Evaluate(const Policy& policy, const std::vector<Evidence>& evidence) {
++  const bool strict = policy.mode == Mode::kProvenanceRequired;
++  bool saw_verifier_down = false;
++  bool saw_valid_provenance = false;
++  const Evidence* classifier_hit = nullptr;
++
++  // Pass 1: hard signals. Order matters: strongest evidence first.
++  for (const Evidence& e : evidence) {
++    switch (e.signal) {
++      case Signal::kC2paValidAiAction:
++        return Block(e, "c2pa_manifest_records_ai_generation", !strict);
++      case Signal::kWatermarkDetected:
++        if (e.confidence >= policy.watermark_threshold)
++          return Block(e, "watermark_detected", !strict);
++        break;
++      case Signal::kC2paInvalid:
++        if (strict) return Block(e, "c2pa_manifest_invalid", false);
++        break;
++      case Signal::kClassifierPositive:
++        if (e.confidence >= policy.classifier_threshold &&
++            e.text_chars >= policy.classifier_min_chars &&
++            (!classifier_hit || e.confidence > classifier_hit->confidence))
++          classifier_hit = &e;
++        break;
++      case Signal::kVerifierUnavailable:
++        saw_verifier_down = true;
++        break;
++      case Signal::kC2paValidNoAiAction:
++        saw_valid_provenance = true;
++        break;
++      case Signal::kNone:
++        break;
++    }
++  }
++
++  // Pass 2: soft signals. Classifier blocks are always overridable
++  // (CONSTRAINTS.md #2) because zero-shot detectors have real FPR.
++  if (classifier_hit)
++    return Block(*classifier_hit, "classifier_above_threshold", true);
++
++  Decision d;
++  if (strict) {
++    if (saw_verifier_down) {
++      d.allow = false; d.overridable = false;
++      d.signal = Signal::kVerifierUnavailable;
++      d.reason = "verifier_unavailable_fail_closed";
++      return d;
++    }
++    if (!saw_valid_provenance) {
++      d.allow = false; d.overridable = false;
++      d.signal = Signal::kNone;
++      d.reason = "no_trusted_provenance";
++      return d;
++    }
++    d.reason = "provenance_valid";
++    return d;
++  }
++
++  d.allow = true;
++  d.reason = saw_verifier_down ? "verifier_unavailable_fail_open" : "no_signal";
++  if (saw_verifier_down) d.signal = Signal::kVerifierUnavailable;
++  return d;
++}
++
++}  // namespace provenance_gate
+diff --git a/components/provenance_gate/policy.h b/components/provenance_gate/policy.h
+new file mode 100644
+index 0000000000..31c91d15fa
+--- /dev/null
++++ b/components/provenance_gate/policy.h
+@@ -0,0 +1,55 @@
++// Copyright 2026 The yubi-OS Authors. BSD-3-Clause (matches Chromium).
++#ifndef COMPONENTS_PROVENANCE_GATE_POLICY_H_
++#define COMPONENTS_PROVENANCE_GATE_POLICY_H_
++
++#include <cstddef>
++#include <string>
++#include <vector>
++
++namespace provenance_gate {
++
++enum class Mode { kBlockOnDetect, kProvenanceRequired };
++
++// One piece of evidence about a resource. Produced by detector adapters
++// (c2pa-rs in-process, TrustMark in-process, remote verifier); consumed here.
++enum class Signal {
++  kNone,                  // adapter ran, found nothing
++  kC2paValidNoAiAction,   // trusted manifest, no AI-generation action recorded
++  kC2paValidAiAction,     // trusted manifest records trainedAlgorithmicMedia etc.
++  kC2paInvalid,           // manifest present but signature/trust fails
++  kWatermarkDetected,     // Anthropic / SynthID / TrustMark / OpenAI signal
++  kClassifierPositive,    // zero-shot text classifier (Binoculars etc.)
++  kVerifierUnavailable,   // remote verifier unreachable / timed out
++};
++
++struct Evidence {
++  Signal signal = Signal::kNone;
++  double confidence = 0.0;     // [0,1], adapter-calibrated
++  std::string source;          // e.g. "anthropic", "synthid", "c2pa", "binoculars"
++  size_t text_chars = 0;       // for text evidence: chars evaluated
++};
++
++struct Policy {
++  Mode mode = Mode::kBlockOnDetect;
++  double watermark_threshold = 0.5;
++  double classifier_threshold = 0.98;
++  size_t classifier_min_chars = 800;
++};
++
++struct Decision {
++  bool allow = true;
++  bool overridable = true;     // "proceed anyway" offered on interstitial
++  Signal signal = Signal::kNone;
++  double confidence = 0.0;
++  std::string source;
++  std::string reason;          // stable, machine-readable
++};
++
++// Pure function. No I/O, no globals. See CONSTRAINTS.md #7.
++Decision Evaluate(const Policy& policy, const std::vector<Evidence>& evidence);
++
++const char* SignalName(Signal s);
++
++}  // namespace provenance_gate
++
++#endif  // COMPONENTS_PROVENANCE_GATE_POLICY_H_
+diff --git a/components/provenance_gate/policy_unittest.cc b/components/provenance_gate/policy_unittest.cc
+new file mode 100644
+index 0000000000..bc9fa6dd38
+--- /dev/null
++++ b/components/provenance_gate/policy_unittest.cc
+@@ -0,0 +1,105 @@
++// Copyright 2026 The yubi-OS Authors. BSD-3-Clause (matches Chromium).
++// Builds under Chromium's gtest AND standalone (-DSTANDALONE_TEST) so CI
++// can run it without a Chromium checkout.
++#include "components/provenance_gate/policy.h"
++
++#ifdef STANDALONE_TEST
++#include <cassert>
++#include <cstdio>
++#define TEST(a, b) static void a##_##b(); [[maybe_unused]] static int a##_##b##_reg = (a##_##b(), 0); static void a##_##b()
++#define EXPECT_TRUE(x) assert(x)
++#define EXPECT_FALSE(x) assert(!(x))
++#define EXPECT_EQ(a, b) assert((a) == (b))
++int main() { std::puts("provenance_gate policy tests: PASS"); return 0; }
++#else
++#include "testing/gtest/include/gtest/gtest.h"
++#endif
++
++namespace provenance_gate {
++namespace {
++
++Evidence Ev(Signal s, double c = 1.0, size_t chars = 0, const char* src = "test") {
++  Evidence e; e.signal = s; e.confidence = c; e.text_chars = chars; e.source = src; return e;
++}
++
++TEST(ProvenanceGatePolicy, ModeA_NoEvidence_Allows) {
++  Decision d = Evaluate(Policy{}, {});
++  EXPECT_TRUE(d.allow);
++  EXPECT_EQ(d.reason, "no_signal");
++}
++
++TEST(ProvenanceGatePolicy, ModeA_WatermarkAboveThreshold_Blocks) {
++  Decision d = Evaluate(Policy{}, {Ev(Signal::kWatermarkDetected, 0.9, 0, "anthropic")});
++  EXPECT_FALSE(d.allow);
++  EXPECT_TRUE(d.overridable);
++  EXPECT_EQ(d.source, "anthropic");
++  EXPECT_EQ(d.reason, "watermark_detected");
++}
++
++TEST(ProvenanceGatePolicy, ModeA_WatermarkBelowThreshold_Allows) {
++  Decision d = Evaluate(Policy{}, {Ev(Signal::kWatermarkDetected, 0.2)});
++  EXPECT_TRUE(d.allow);
++}
++
++TEST(ProvenanceGatePolicy, ModeA_C2paAiAction_Blocks) {
++  Decision d = Evaluate(Policy{}, {Ev(Signal::kC2paValidAiAction, 1.0, 0, "c2pa")});
++  EXPECT_FALSE(d.allow);
++  EXPECT_EQ(d.reason, "c2pa_manifest_records_ai_generation");
++}
++
++TEST(ProvenanceGatePolicy, ModeA_ClassifierShortText_NeverBlocks) {
++  Decision d = Evaluate(Policy{}, {Ev(Signal::kClassifierPositive, 0.999, 200, "binoculars")});
++  EXPECT_TRUE(d.allow);
++}
++
++TEST(ProvenanceGatePolicy, ModeA_ClassifierLongText_BlocksOverridable) {
++  Decision d = Evaluate(Policy{}, {Ev(Signal::kClassifierPositive, 0.99, 5000, "binoculars")});
++  EXPECT_FALSE(d.allow);
++  EXPECT_TRUE(d.overridable);
++  EXPECT_EQ(d.reason, "classifier_above_threshold");
++}
++
++TEST(ProvenanceGatePolicy, ModeA_VerifierDown_FailsOpen) {
++  Decision d = Evaluate(Policy{}, {Ev(Signal::kVerifierUnavailable, 0)});
++  EXPECT_TRUE(d.allow);
++  EXPECT_EQ(d.reason, "verifier_unavailable_fail_open");
++}
++
++TEST(ProvenanceGatePolicy, ModeB_NoProvenance_Blocks) {
++  Policy p; p.mode = Mode::kProvenanceRequired;
++  Decision d = Evaluate(p, {});
++  EXPECT_FALSE(d.allow);
++  EXPECT_FALSE(d.overridable);
++  EXPECT_EQ(d.reason, "no_trusted_provenance");
++}
++
++TEST(ProvenanceGatePolicy, ModeB_ValidProvenance_Allows) {
++  Policy p; p.mode = Mode::kProvenanceRequired;
++  Decision d = Evaluate(p, {Ev(Signal::kC2paValidNoAiAction)});
++  EXPECT_TRUE(d.allow);
++  EXPECT_EQ(d.reason, "provenance_valid");
++}
++
++TEST(ProvenanceGatePolicy, ModeB_InvalidManifest_BlocksNonOverridable) {
++  Policy p; p.mode = Mode::kProvenanceRequired;
++  Decision d = Evaluate(p, {Ev(Signal::kC2paInvalid)});
++  EXPECT_FALSE(d.allow);
++  EXPECT_FALSE(d.overridable);
++}
++
++TEST(ProvenanceGatePolicy, ModeB_VerifierDown_FailsClosed) {
++  Policy p; p.mode = Mode::kProvenanceRequired;
++  Decision d = Evaluate(p, {Ev(Signal::kC2paValidNoAiAction), Ev(Signal::kVerifierUnavailable)});
++  EXPECT_FALSE(d.allow);
++  EXPECT_EQ(d.reason, "verifier_unavailable_fail_closed");
++}
++
++TEST(ProvenanceGatePolicy, StrongestSignalWins) {
++  Decision d = Evaluate(Policy{}, {Ev(Signal::kClassifierPositive, 0.99, 5000),
++                                   Ev(Signal::kWatermarkDetected, 0.7, 0, "synthid")});
++  EXPECT_EQ(d.reason, "watermark_detected");
++  EXPECT_EQ(d.source, "synthid");
++}
++
++}  // namespace
++}  // namespace provenance_gate
+-- 
+2.53.0
+
