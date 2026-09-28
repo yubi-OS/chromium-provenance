@@ -52,6 +52,10 @@ jobs:
         timeout-minutes: 700
         run: |
           set -euo pipefail
+          # Sweep root-owned leftovers: out-of-band root builds (bridge/agent) can
+          # rewrite build.ninja during gn regen as root mode 600, which the runner
+          # user's ninja then cannot load. Chown before building.
+          sudo find out/arm64-qual -user root -exec chown ubuntu:ubuntu {} +
           nice -n 19 ionice -c3 ninja -C out/arm64-qual -j 8 -l 10 content_shell 2>&1 | tee "$GITHUB_WORKSPACE/evidence/ninja-build.log" | tail -5
 
       - name: ELF verify content_shell
