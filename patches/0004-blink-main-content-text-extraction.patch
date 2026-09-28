@@ -1,0 +1,330 @@
+From ff6223181be14e9f9ab2d7fc714700585638b894 Mon Sep 17 00:00:00 2001
+From: OMNI-AGENT <foil-copy-overrate@duck.com>
+Date: Mon, 28 Sep 2026 01:56:28 -0700
+Subject: [PATCH] blink: report main-content page text to the browser (series
+ 0004)
+
+---
+ components/provenance_gate/BUILD.gn           | 19 +++++-
+ .../provenance_gate/public/mojom/BUILD.gn     |  6 ++
+ .../public/mojom/provenance_gate.mojom        | 12 ++++
+ .../renderer/provenance_page_text_observer.cc | 68 +++++++++++++++++++
+ .../renderer/provenance_page_text_observer.h  | 35 ++++++++++
+ content/shell/BUILD.gn                        |  2 +
+ .../shell/browser/provenance_gate_throttle.h  | 10 +--
+ .../browser/shell_content_browser_client.cc   | 50 ++++++++++++++
+ .../renderer/shell_content_renderer_client.cc |  2 +
+ 9 files changed, 198 insertions(+), 6 deletions(-)
+ create mode 100644 components/provenance_gate/public/mojom/BUILD.gn
+ create mode 100644 components/provenance_gate/public/mojom/provenance_gate.mojom
+ create mode 100644 components/provenance_gate/renderer/provenance_page_text_observer.cc
+ create mode 100644 components/provenance_gate/renderer/provenance_page_text_observer.h
+
+diff --git a/components/provenance_gate/BUILD.gn b/components/provenance_gate/BUILD.gn
+index 9b9bcde514..6262e5b4aa 100644
+--- a/components/provenance_gate/BUILD.gn
++++ b/components/provenance_gate/BUILD.gn
+@@ -4,8 +4,25 @@ static_library("provenance_gate") {
+   deps = [ "//base" ]
+ }
+ 
++source_set("renderer") {
++  sources = [
++    "renderer/provenance_page_text_observer.cc",
++    "renderer/provenance_page_text_observer.h",
++  ]
++  public_deps = [ "//components/provenance_gate/public/mojom" ]
++  deps = [
++    ":provenance_gate",
++    "//content/public/renderer",
++    "//third_party/blink/public:blink",
++    "//url",
++  ]
++}
++
+ source_set("unit_tests") {
+   testonly = true
+   sources = [ "policy_unittest.cc" ]
+-  deps = [ ":provenance_gate", "//testing/gtest" ]
++  deps = [
++    ":provenance_gate",
++    "//testing/gtest",
++  ]
+ }
+diff --git a/components/provenance_gate/public/mojom/BUILD.gn b/components/provenance_gate/public/mojom/BUILD.gn
+new file mode 100644
+index 0000000000..91f9df9e33
+--- /dev/null
++++ b/components/provenance_gate/public/mojom/BUILD.gn
+@@ -0,0 +1,6 @@
++# Copyright 2026 The yubi-OS Authors. BSD-3-Clause.
++import("//mojo/public/tools/bindings/mojom.gni")
++
++mojom("mojom") {
++  sources = [ "provenance_gate.mojom" ]
++}
+diff --git a/components/provenance_gate/public/mojom/provenance_gate.mojom b/components/provenance_gate/public/mojom/provenance_gate.mojom
+new file mode 100644
+index 0000000000..628206255b
+--- /dev/null
++++ b/components/provenance_gate/public/mojom/provenance_gate.mojom
+@@ -0,0 +1,12 @@
++// Copyright 2026 The yubi-OS Authors. BSD-3-Clause (matches Chromium).
++
++module provenance_gate.mojom;
++
++// Series 0004: the renderer reports extracted main-content text to the
++// browser process. Detector adapters (Series 0007) evaluate the text and
++// feed Evidence to the policy engine.
++interface ProvenancePageText {
++  // |frame_url| is the reported frame URL, |text| its extracted
++  // main-content text (renderer-capped at a message-size guard).
++  ReportPageText(string frame_url, string text);
++};
+diff --git a/components/provenance_gate/renderer/provenance_page_text_observer.cc b/components/provenance_gate/renderer/provenance_page_text_observer.cc
+new file mode 100644
+index 0000000000..dbd15c48c3
+--- /dev/null
++++ b/components/provenance_gate/renderer/provenance_page_text_observer.cc
+@@ -0,0 +1,68 @@
++// Copyright 2026 The yubi-OS Authors. BSD-3-Clause (matches Chromium).
++#include "components/provenance_gate/renderer/provenance_page_text_observer.h"
++
++#include <utility>
++
++#include "base/logging.h"
++#include "content/public/renderer/render_frame.h"
++#include "third_party/blink/public/platform/browser_interface_broker_proxy.h"
++#include "third_party/blink/public/platform/web_string.h"
++#include "third_party/blink/public/web/web_document.h"
++#include "third_party/blink/public/web/web_local_frame.h"
++#include "url/gurl.h"
++
++namespace provenance_gate {
++
++namespace {
++// Message-size guard, not policy: the classifier floor
++// (Policy::classifier_min_chars) is applied browser-side.
++constexpr size_t kMaxReportedChars = 20000;
++}  // namespace
++
++ProvenancePageTextObserver::ProvenancePageTextObserver(
++    content::RenderFrame* render_frame)
++    : content::RenderFrameObserver(render_frame) {}
++
++ProvenancePageTextObserver::~ProvenancePageTextObserver() = default;
++
++void ProvenancePageTextObserver::DidFinishLoad() {
++  if (reported_) {
++    return;
++  }
++  reported_ = true;
++
++  if (!render_frame()->IsMainFrame()) {
++    return;
++  }
++  blink::WebLocalFrame* web_frame = render_frame()->GetWebFrame();
++  if (!web_frame) {
++    return;
++  }
++  blink::WebDocument document = web_frame->GetDocument();
++  if (document.IsNull()) {
++    return;
++  }
++
++  // Visible text (dump-as-text semantics: no script/style text). Capped at
++  // a transport guard; classification floors live in the Policy.
++  std::string text = document.ContentAsTextForTesting().Utf8();
++  if (text.size() > kMaxReportedChars) {
++    text.resize(kMaxReportedChars);
++  }
++
++  const GURL url(document.Url().GetString().Utf8());
++  VLOG(1) << "provenance_gate: renderer page_text url=" << url.spec()
++          << " chars=" << text.size();
++
++  if (!remote_.is_bound()) {
++    render_frame()->GetBrowserInterfaceBroker().GetInterface(
++        remote_.BindNewPipeAndPassReceiver());
++  }
++  remote_->ReportPageText(url.spec(), text);
++}
++
++void ProvenancePageTextObserver::OnDestruct() {
++  delete this;
++}
++
++}  // namespace provenance_gate
+diff --git a/components/provenance_gate/renderer/provenance_page_text_observer.h b/components/provenance_gate/renderer/provenance_page_text_observer.h
+new file mode 100644
+index 0000000000..1503e210a4
+--- /dev/null
++++ b/components/provenance_gate/renderer/provenance_page_text_observer.h
+@@ -0,0 +1,35 @@
++// Copyright 2026 The yubi-OS Authors. BSD-3-Clause (matches Chromium).
++#ifndef COMPONENTS_PROVENANCE_GATE_RENDERER_PROVENANCE_PAGE_TEXT_OBSERVER_H_
++#define COMPONENTS_PROVENANCE_GATE_RENDERER_PROVENANCE_PAGE_TEXT_OBSERVER_H_
++
++#include "components/provenance_gate/public/mojom/provenance_gate.mojom.h"
++#include "content/public/renderer/render_frame_observer.h"
++#include "mojo/public/cpp/bindings/remote.h"
++
++namespace provenance_gate {
++
++// Series 0004: extracts the main frame text once the frame finishes
++// loading and hands it to the browser over mojo. Policy floors
++// (classifier_min_chars) are applied browser-side; this side only extracts
++// and transports. The renderer-side cap is a message-size guard, not policy.
++class ProvenancePageTextObserver : public content::RenderFrameObserver {
++ public:
++  explicit ProvenancePageTextObserver(content::RenderFrame* render_frame);
++  ~ProvenancePageTextObserver() override;
++
++  ProvenancePageTextObserver(const ProvenancePageTextObserver&) = delete;
++  ProvenancePageTextObserver& operator=(const ProvenancePageTextObserver&) =
++      delete;
++
++ private:
++  // content::RenderFrameObserver:
++  void DidFinishLoad() override;
++  void OnDestruct() override;
++
++  mojo::Remote<mojom::ProvenancePageText> remote_;
++  bool reported_ = false;
++};
++
++}  // namespace provenance_gate
++
++#endif  // COMPONENTS_PROVENANCE_GATE_RENDERER_PROVENANCE_PAGE_TEXT_OBSERVER_H_
+diff --git a/content/shell/BUILD.gn b/content/shell/BUILD.gn
+index c391625d82..2195da926e 100644
+--- a/content/shell/BUILD.gn
++++ b/content/shell/BUILD.gn
+@@ -312,6 +312,8 @@ static_library("content_shell_lib") {
+ 
+   public_deps = [
+       "//components/provenance_gate",
++      "//components/provenance_gate/public/mojom",
++      "//components/provenance_gate:renderer",
+     ":android_shell_descriptors",
+ 
+     # content_shell_lib also exposes all public content APIs.
+diff --git a/content/shell/browser/provenance_gate_throttle.h b/content/shell/browser/provenance_gate_throttle.h
+index 664d4c4680..a2c8c2ce71 100644
+--- a/content/shell/browser/provenance_gate_throttle.h
++++ b/content/shell/browser/provenance_gate_throttle.h
+@@ -8,11 +8,11 @@
+ 
+ namespace content {
+ 
+-// Series 0002: main-frame provenance gate. Evaluates the provenance policy
+-// on main-frame HTML responses and (in a follow-up series) on subresources.
+-// Detector adapters (Series 0007) supply Evidence; until they exist the
+-// engine sees no evidence and Mode A allows everything, which keeps this
+-// wiring observable via --enable-logging without changing behavior.
++// Series 0002/0003: main-frame provenance gate. Evaluates the provenance
++// policy on main-frame HTML responses and (in a follow-up series) on
++// subresources. Detector adapters (Series 0007) supply Evidence; until they
++// exist the engine sees no evidence: Mode A allows everything, Mode B
++// (provenance_required) fails closed and cancels the load.
+ class ProvenanceGateThrottle : public blink::URLLoaderThrottle {
+  public:
+   explicit ProvenanceGateThrottle(const provenance_gate::Policy& policy);
+diff --git a/content/shell/browser/shell_content_browser_client.cc b/content/shell/browser/shell_content_browser_client.cc
+index a92004dba9..77ccb8f6c7 100644
+--- a/content/shell/browser/shell_content_browser_client.cc
++++ b/content/shell/browser/shell_content_browser_client.cc
+@@ -5,6 +5,10 @@
+ #include "content/shell/browser/shell_content_browser_client.h"
+ 
+ #include "content/shell/browser/provenance_gate_throttle.h"
++#include "components/provenance_gate/public/mojom/provenance_gate.mojom.h"
++#include "mojo/public/cpp/bindings/self_owned_receiver.h"
++#include <map>
++#include "url/gurl.h"
+ 
+ #include <stddef.h>
+ 
+@@ -200,6 +204,50 @@ class ShellControllerImpl : public mojom::ShellController {
+   void ShutDown() override { Shell::Shutdown(); }
+ };
+ 
++
++// Series 0004: browser-side store of reported page text. UI-thread only
++// (frame-bound interfaces bind there). Detector adapters (Series 0007)
++// will read this to build Evidence.
++class ProvenancePageTextStore {
++ public:
++  static ProvenancePageTextStore& Get() {
++    static base::NoDestructor<ProvenancePageTextStore> instance;
++    return *instance;
++  }
++
++  void Record(const GURL& url, const std::string& text) {
++    const size_t chars = text.size();
++    const bool above_floor =
++        chars >= provenance_gate::Policy().classifier_min_chars;
++    pages_[url.spec()] = text;
++    VLOG(1) << "provenance_gate: page_text url=" << url.spec()
++            << " chars=" << chars << " above_floor=" << above_floor;
++  }
++
++ private:
++  std::map<std::string, std::string> pages_;
++};
++
++class ProvenancePageTextImpl
++    : public provenance_gate::mojom::ProvenancePageText {
++ public:
++  ProvenancePageTextImpl() = default;
++
++  void ReportPageText(const std::string& frame_url,
++                      const std::string& text) override {
++    ProvenancePageTextStore::Get().Record(GURL(frame_url), text);
++  }
++};
++
++void BindProvenancePageText(
++    content::RenderFrameHost* render_frame_host,
++    mojo::PendingReceiver<provenance_gate::mojom::ProvenancePageText>
++        receiver) {
++  DCHECK(render_frame_host);
++  mojo::MakeSelfOwnedReceiver(
++      std::make_unique<ProvenancePageTextImpl>(), std::move(receiver));
++}
++
+ void BindRustTestServiceReceiver(
+     RenderFrameHost* render_frame_host,
+     mojo::PendingReceiver<content::rust_test::mojom::RustTestService>
+@@ -650,6 +698,8 @@ void ShellContentBrowserClient::RegisterBrowserInterfaceBindersForFrame(
+   map->Add<network_hints::mojom::NetworkHintsHandler>(&BindNetworkHintsHandler);
+   map->Add<content::rust_test::mojom::RustTestService>(
+       base::BindRepeating(&BindRustTestServiceReceiver));
++  map->Add<provenance_gate::mojom::ProvenancePageText>(
++      base::BindRepeating(&BindProvenancePageText));
+ #if BUILDFLAG(IS_WIN)
+   map->Add<media::mojom::MediaFoundationPreferences>(
+       &BindMediaFoundationPreferences);
+diff --git a/content/shell/renderer/shell_content_renderer_client.cc b/content/shell/renderer/shell_content_renderer_client.cc
+index 5281e4d322..018906df89 100644
+--- a/content/shell/renderer/shell_content_renderer_client.cc
++++ b/content/shell/renderer/shell_content_renderer_client.cc
+@@ -20,6 +20,7 @@
+ #include "base/test/allow_check_is_test_for_testing.h"
+ #include "base/types/pass_key.h"
+ #include "components/cdm/renderer/external_clear_key_key_system_info.h"
++#include "components/provenance_gate/renderer/provenance_page_text_observer.h"
+ #include "components/network_hints/renderer/web_prescient_networking_impl.h"
+ #include "components/surface_embed/renderer/create_plugin.h"
+ #include "components/web_cache/renderer/web_cache_impl.h"
+@@ -344,6 +345,7 @@ void ShellContentRendererClient::RenderFrameCreated(RenderFrame* render_frame) {
+   // browser tests. If we only create that for browser tests then the override
+   // of this method in WebTestContentRendererClient would not be needed.
+   new ShellRenderFrameObserver(render_frame);
++  new provenance_gate::ProvenancePageTextObserver(render_frame);
+ }
+ 
+ bool ShellContentRendererClient::OverrideCreatePlugin(
+-- 
+2.53.0
+
