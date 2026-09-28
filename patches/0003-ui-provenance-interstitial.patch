@@ -1,0 +1,57 @@
+From 1f96ba5fda9e3561486eb5b1273111d7a0f6e940 Mon Sep 17 00:00:00 2001
+From: OMNI-AGENT <foil-copy-overrate@duck.com>
+Date: Mon, 28 Sep 2026 01:15:23 -0700
+Subject: [PATCH 3/4] network: provenance gate cancels blocked loads
+
+Series 0003 (content_shell adaptation): when the Decision blocks, the
+throttle defers and cancels with ERR_BLOCKED_BY_CLIENT + the stable
+reason. content_shell shows its network error page; the chrome
+interstitial (signal/source/confidence/proceed-anyway) lands with the
+chrome port.
+---
+ .../shell/browser/provenance_gate_throttle.cc   | 17 ++++++++++++-----
+ 1 file changed, 12 insertions(+), 5 deletions(-)
+
+diff --git a/content/shell/browser/provenance_gate_throttle.cc b/content/shell/browser/provenance_gate_throttle.cc
+index dce293fa3f..12b16ca6c7 100644
+--- a/content/shell/browser/provenance_gate_throttle.cc
++++ b/content/shell/browser/provenance_gate_throttle.cc
+@@ -2,6 +2,7 @@
+ #include "content/shell/browser/provenance_gate_throttle.h"
+ 
+ #include "base/logging.h"
++#include "net/base/net_errors.h"
+ #include "url/gurl.h"
+ 
+ namespace content {
+@@ -19,16 +20,22 @@ void ProvenanceGateThrottle::WillProcessResponse(
+     network::mojom::URLResponseHead* response_head,
+     bool* defer) {
+   // Series 0002: the gate wiring. Detector adapters (Series 0007) supply
+-  // Evidence; until they exist the engine sees no evidence and Mode A
+-  // allows everything. Log the evaluation so the wiring is observable via
+-  // --enable-logging --v=1.
++  // Evidence; until they exist the engine sees no evidence: Mode A allows
++  // everything, Mode B (provenance_required) fails closed.
+   std::vector<provenance_gate::Evidence> evidence;
+   const auto decision = provenance_gate::Evaluate(policy_, evidence);
+   VLOG(1) << "provenance_gate: url=" << response_url.spec()
+           << " allow=" << decision.allow
+           << " reason=" << decision.reason;
+-  // Blocked handling (defer/interstitial) lands with Series 0003; the
+-  // detector adapters that can produce a block land with Series 0007.
++
++  // Series 0003: block action. content_shell shows its network error page
++  // (ERR_BLOCKED_BY_CLIENT); the chrome interstitial with signal/source/
++  // confidence/proceed-anyway lands with the chrome port.
++  if (!decision.allow) {
++    *defer = true;
++    delegate_->CancelWithError(net::ERR_BLOCKED_BY_CLIENT,
++                                decision.reason);
++  }
+ }
+ 
+ }  // namespace content
+-- 
+2.53.0
+
