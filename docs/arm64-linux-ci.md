@@ -127,3 +127,17 @@ Next phase: the provenance-gate patches SERIES 0001-0007.
 ## Puppeteer screenshot validated, 2026-09-28
 
 `content_shell --ozone-platform=headless --remote-debugging-port=9222` + `puppeteer-core` (npm, 25 packages) connected over the DevTools protocol: `page.goto('https://example.com')` → `page.screenshot()` → a valid 1280×800 PNG (19.4 KB) showing the fully rendered page (title, text, link, correct fonts/spacing). The network stack, HTML parsing, CSS layout, and text rendering all work end-to-end on the aarch64 build. Test harness: `/home/ubuntu/pptr-test/shot.js` on HIGH-MEM. This closes the runtime validation loop for the build; provenance-gate patches are the next phase.
+
+
+## Provenance-gate patches 0001-0002 authored + CI green, 2026-09-28
+
+The patch series is now authored from the real tree (the first patches ever generated from the HIGH-MEM checkout — the SERIES.md "needs a real checkout" prerequisite is met):
+
+- **0001** `0001-build-add-provenance_gate-policy-engine-component.patch` (branch commit `c7ac21abe2`): the pure-function policy engine (Mode A `block_on_detect` / Mode B `provenance_required`, the hard/soft signal passes, classifier-only blocks need ≥800 chars + ≥0.98 confidence and stay overridable) + 12 unit tests with the dual build (chromium gtest + `-DSTANDALONE_TEST`). Standalone run: `provenance_gate policy tests: PASS`.
+- **0002** `0002-network-provenance-gate-throttle-wired-into-content_.patch` (branch commit `71168f9b07`): `ProvenanceGateThrottle` (`blink::URLLoaderThrottle`) wired via the shell's `CreateURLLoaderThrottles`; validated live: `provenance_gate: url=https://example.com/ allow=1 reason=no_signal` at VERBOSE1 — the gate evaluates every main-frame navigation. Adapted from the SERIES `chrome/browser` row to `content_shell` for the testable build; the chrome wiring lands with the chrome port.
+
+Toolchain rebuild note (load-bearing): the full `build_rust.py --skip-checkout` (build + `x.py install --stage 2`) wipes the toolchain `bin/` — RE-STAGE bindgen (0.73.2, `~/.cargo/bin/bindgen`) + rustfmt (the native stage1-tools binary) into `llvm-host-install/bin/` afterward, plus `librustc_driver-8cdff714.so` if the rustc-dev dist's driver hash differs.
+
+The CI workflow applies the overlay's `patches/0*.patch` idempotently before ninja (commit `b3b0d592`); run [36394732658](https://github.com/yubi-OS/chromium-provenance/actions/runs/36394732658) **GREEN** with the patches in the graph. Patch files + SERIES.md (authored markers) at overlay `87975917`.
+
+Remaining series: 0003 (interstitial), 0004 (blink main-content extraction), 0005 (prefs/policy), 0006 (omnibox chip), 0007 (utility-process C2PA/TrustMark detectors — the first source of real Evidence).
