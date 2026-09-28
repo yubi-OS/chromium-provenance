@@ -112,3 +112,13 @@ Run 36326076738 GREEN at `18f54d12` (the ELF-verify SIGPIPE fix): content_shell 
 Full toolchain-rebuild caveat (repeat of above, load-bearing): any `build_rust.py` re-install wipes the toolchain bin/ — re-stage bindgen (0.73.2, `~/.cargo/bin/bindgen`) + rustfmt (the native stage1-tools binary) into `llvm-host-install/bin/` afterward.
 
 Next phase: the provenance-gate patches SERIES 0001-0007 land in the tree.
+
+## Runtime smoke test, 2026-09-27
+
+content_shell runs. Two findings:
+
+1. **X11 ozone DCHECK (runtime bug)**: with DISPLAY set, `--headless` still initializes the X11 ozone, and `OzonePlatformX11::InitializeUI → X11CursorFactory → XCursorLoader → PropertyCache` response handling crashes: `SequenceCheckerImpl::CalledOnValidSequence → base::Lock::Acquire → pthread_mutex_unlock EINVAL` (lock_impl_posix.cc:90). The dcheck_trylock getting EINVAL means a corrupted/uninitialized mutex — consistent with a data race that ARM64's weak memory model exposes and x86's TSO masks, or an init-order issue in the X11 ozone property cache. Not a build blocker.
+2. **Workaround (validated)**: `--ozone-platform=headless` → the browser runs: DevTools listening, renderer children spawned, dbus noise only.
+3. **Known limitation**: `--dump-dom about:blank` did not complete within 240s across three attempts (the browser idles after startup; the dbus fast-fail env `DBUS_*_BUS_ADDRESS=/dev/null` shortened startup but the dump never fired). Debugging the navigation pipeline is separate follow-up work.
+
+Next phase: the provenance-gate patches SERIES 0001-0007.
