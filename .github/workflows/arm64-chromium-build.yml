@@ -32,6 +32,21 @@ jobs:
           df -h /home/ubuntu | tee evidence/disk-before.txt
           /home/ubuntu/chromium-build/gn-cipd/gn --version | tee evidence/gn-version.txt
 
+      - name: Apply provenance-gate patches
+        run: |
+          set -euo pipefail
+          if ls patches/0*.patch > /dev/null 2>&1; then
+            if git -C /home/ubuntu/chromium-build/src apply --check --whitespace=nowarn patches/0*.patch 2>/dev/null; then
+              git -C /home/ubuntu/chromium-build/src apply --whitespace=nowarn patches/0*.patch
+              echo "patches applied"
+            else
+              echo "patches already applied (branch state)"
+            fi
+            sudo -u ubuntu chown -R ubuntu:ubuntu /home/ubuntu/chromium-build/src/components/provenance_gate /home/ubuntu/chromium-build/src/content/shell
+          else
+            echo "no patches in overlay"
+          fi
+
       - name: ninja content_shell (throttled)
         working-directory: /home/ubuntu/chromium-build/src
         timeout-minutes: 700
