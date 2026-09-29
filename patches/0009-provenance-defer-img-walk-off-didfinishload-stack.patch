@@ -1,0 +1,141 @@
+From 67db922c5d000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: OMNI-AGENT <foil-copy-overrate@duck.com>
+Subject: [PATCH] provenance: defer the img walk off the DidFinishLoad stack (series 0009)
+
+---
+diff --git a/components/provenance_gate/renderer/provenance_page_text_observer.cc b/components/provenance_gate/renderer/provenance_page_text_observer.cc
+index 5c88fa0cd6..7750e6a39d 100644
+--- a/components/provenance_gate/renderer/provenance_page_text_observer.cc
++++ b/components/provenance_gate/renderer/provenance_page_text_observer.cc
+@@ -6,6 +6,8 @@
+ #include <vector>
+ 
+ #include "base/logging.h"
++#include "base/memory/weak_ptr.h"
++#include "base/task/sequenced_task_runner.h"
+ #include "content/public/renderer/render_frame.h"
+ #include "third_party/blink/public/platform/browser_interface_broker_proxy.h"
+ #include "third_party/blink/public/platform/web_string.h"
+@@ -64,32 +66,63 @@ void ProvenancePageTextObserver::DidFinishLoad() {
+   }
+   remote_->ReportPageText(url.spec(), text);
+ 
+-  // Series 0008: collect <img> source URLs for the browser-side C2PA
+-  // manifest inspection. Count-capped at a transport guard; policy stays
+-  // browser-side.
++  // Series 0008: the <img> walk must NOT run on the DidFinishLoad stack.
++  // DidFinishLoad can fire from inside an image event dispatch (the
++  // HTMLImageElement's load/error event handlers drive the frame's load
++  // notifications), and iterating the DOM on that stack dereferences Blink
++  // GC pointers that are transiently null (the DCHECK in
++  // WebPrivatePtrForGC::operator->, web_private_ptr.h). Collection-API
++  // swaps (document.All() vs body.GetElementsByHTMLTagName) do not fix
++  // this; the fix is running the walk after the event dispatch unwinds,
++  // with a quiescent DOM, which is the stable condition the dom_serializer
++  // browsertest walks under. WeakPtr handles frame teardown between post
++  // and run.
++  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
++      FROM_HERE,
++      base::BindOnce(&ProvenancePageTextObserver::WalkImages,
++                     weak_factory_.GetWeakPtr()));
++}
++
++void ProvenancePageTextObserver::WalkImages() {
++  blink::WebLocalFrame* web_frame = render_frame()->GetWebFrame();
++  if (!web_frame) {
++    return;
++  }
++  blink::WebDocument document = web_frame->GetDocument();
++  if (document.IsNull()) {
++    return;
++  }
++  const GURL url(document.Url().GetString().Utf8());
++
+   VLOG(1) << "provenance_gate: renderer img_walk starting";
+-  blink::WebElementCollection collection = document.All();
+-  collection.Reset();
++  // Series 0008: collect <img> srcs using the browsertest pattern
++  // (GetElementsByHTMLTagName + FirstItem/NextItem on body). Count-capped
++  // at a transport guard; policy stays browser-side.
++  blink::WebElement body = document.Body();
+   std::vector<std::string> image_urls;
+-  constexpr size_t kMaxImageUrls = 64;
+-  for (blink::WebElement element = collection.NextItem();
+-       !element.IsNull() && image_urls.size() < kMaxImageUrls;
+-       element = collection.NextItem()) {
+-    if (!element.HasHTMLTagName("img")) {
+-      continue;
+-    }
+-    blink::WebString src = element.GetAttribute("src");
+-    if (src.IsNull() || src.IsEmpty()) {
+-      continue;
+-    }
+-    const GURL image_url(document.CompleteURL(src).GetString().Utf8());
+-    if (image_url.is_valid() && image_url.SchemeIsHTTPOrHTTPS()) {
+-      image_urls.push_back(image_url.spec());
++  if (!body.IsNull()) {
++    blink::WebElementCollection images = body.GetElementsByHTMLTagName("img");
++    constexpr size_t kMaxImageUrls = 64;
++    for (blink::WebElement element = images.FirstItem();
++         !element.IsNull() && image_urls.size() < kMaxImageUrls;
++         element = images.NextItem()) {
++      blink::WebString src = element.GetAttribute("src");
++      if (src.IsNull() || src.IsEmpty()) {
++        continue;
++      }
++      const GURL image_url(document.CompleteURL(src).GetString().Utf8());
++      if (image_url.is_valid() && image_url.SchemeIsHTTPOrHTTPS()) {
++        image_urls.push_back(image_url.spec());
++      }
+     }
+   }
+   VLOG(1) << "provenance_gate: renderer img_walk found "
+           << image_urls.size() << " images";
+   if (!image_urls.empty()) {
++    if (!remote_.is_bound()) {
++      render_frame()->GetBrowserInterfaceBroker().GetInterface(
++          remote_.BindNewPipeAndPassReceiver());
++    }
+     remote_->ReportPageImages(url.spec(), image_urls);
+   }
+ }
+diff --git a/components/provenance_gate/renderer/provenance_page_text_observer.h b/components/provenance_gate/renderer/provenance_page_text_observer.h
+index 1503e210a4..66ad042cb7 100644
+--- a/components/provenance_gate/renderer/provenance_page_text_observer.h
++++ b/components/provenance_gate/renderer/provenance_page_text_observer.h
+@@ -2,9 +2,11 @@
+ #ifndef COMPONENTS_PROVENANCE_GATE_RENDERER_PROVENANCE_PAGE_TEXT_OBSERVER_H_
+ #define COMPONENTS_PROVENANCE_GATE_RENDERER_PROVENANCE_PAGE_TEXT_OBSERVER_H_
+ 
++#include "base/memory/weak_ptr.h"
+ #include "components/provenance_gate/public/mojom/provenance_gate.mojom.h"
+ #include "content/public/renderer/render_frame_observer.h"
+ #include "mojo/public/cpp/bindings/remote.h"
++#include "url/gurl.h"
+ 
+ namespace provenance_gate {
+ 
+@@ -12,6 +14,10 @@ namespace provenance_gate {
+ // loading and hands it to the browser over mojo. Policy floors
+ // (classifier_min_chars) are applied browser-side; this side only extracts
+ // and transports. The renderer-side cap is a message-size guard, not policy.
++// Series 0008: also collects <img> source URLs for browser-side C2PA
++// inspection. The img walk is posted off the DidFinishLoad stack (see .cc
++// comment) because DidFinishLoad can fire from inside an image event
++// dispatch, where Blink GC pointers are transiently null.
+ class ProvenancePageTextObserver : public content::RenderFrameObserver {
+  public:
+   explicit ProvenancePageTextObserver(content::RenderFrame* render_frame);
+@@ -26,8 +32,12 @@ class ProvenancePageTextObserver : public content::RenderFrameObserver {
+   void DidFinishLoad() override;
+   void OnDestruct() override;
+ 
++  // Series 0008: runs as a posted task after DidFinishLoad unwinds.
++  void WalkImages();
++
+   mojo::Remote<mojom::ProvenancePageText> remote_;
+   bool reported_ = false;
++  base::WeakPtrFactory<ProvenancePageTextObserver> weak_factory_{this};
+ };
+ 
+ }  // namespace provenance_gate

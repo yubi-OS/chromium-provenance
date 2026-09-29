@@ -39,7 +39,7 @@ jobs:
             echo "artifact: content_shell (provenance-gated Chromium 153.0.8010.36)"
             echo "built-from: yubi-OS/chromium fork commit $(git rev-parse HEAD)"
             echo "built-on: ubuntu HIGH-MEM aarch64, $(date -u +%FT%TZ)"
-            echo "overlay: yubi-OS/chromium-provenance patches/0001-0007"
+            echo "overlay: yubi-OS/chromium-provenance patches/0001-0009"
             echo "policy: --provenance-mode=block_on_detect|provenance_required"
           } > "$STAGE/provenance.txt"
           cd "$STAGE"
@@ -65,7 +65,7 @@ jobs:
             echo "draft-then-attach-then-publish flow was put in place)."
             echo ""
             echo "**artifact:** content_shell (provenance-gated Chromium 153.0.8010.36)"
-            echo "**built-from:** yubi-OS/chromium fork, provenance-gate branch, overlay patches 0001-0007"
+            echo "**built-from:** yubi-OS/chromium fork, provenance-gate branch, overlay patches 0001-0009"
             echo "**built-on:** ubuntu HIGH-MEM aarch64 (Snapdragon X1E80100)"
             echo "**policy:** --provenance-mode=block_on_detect | provenance_required"
             echo ""
@@ -83,7 +83,7 @@ jobs:
             echo ""
             echo '```'
             echo "tar --zstd -xf bundle.tar.zst"
-            echo "cd release-bundle && ./content_shell --ozone-platform=headless --provenance-mode=block_on_detect <url>"
+            echo "cd release-bundle && LD_LIBRARY_PATH=$PWD/lib ./content_shell --ozone-platform=headless --provenance-mode=block_on_detect <url>"
             echo '```'
             echo ""
             echo "System libs (asound, atk, cairo, ...) are not bundled — the distro provides them."
