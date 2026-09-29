@@ -1,0 +1,16 @@
+name: Runner pickup probe
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: [self-hosted, Linux]
+    timeout-minutes: 5
+    steps:
+      - name: Report pickup
+        run: |
+          echo "picked up by runner: $RUNNER_NAME"
+          echo "labels: $RUNNER_LABELS"
