@@ -1,0 +1,792 @@
+From 90901e440b000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: OMNI-AGENT <foil-copy-overrate@duck.com>
+Subject: [PATCH] chrome: integrate the provenance gate into the full browser (series 0010)
+
+---
+diff --git a/chrome/browser/BUILD.gn b/chrome/browser/BUILD.gn
+index eaa7929a31..d520f38991 100644
+--- a/chrome/browser/BUILD.gn
++++ b/chrome/browser/BUILD.gn
+@@ -1105,6 +1105,7 @@ source_set("core") {
+     "//chrome/browser/webid",
+     "//chrome/common:version_header",
+     "//chrome/services/speech/buildflags",
++    "//components/provenance_gate:browser",
+     "//components/activity_reporter",
+     "//components/actor/core",
+     "//components/actor/public/mojom:mojo_bindings",
+diff --git a/chrome/browser/chrome_content_browser_client.cc b/chrome/browser/chrome_content_browser_client.cc
+index e30528ed87..b7998d8477 100644
+--- a/chrome/browser/chrome_content_browser_client.cc
++++ b/chrome/browser/chrome_content_browser_client.cc
+@@ -231,6 +231,7 @@
+ #include "chrome/installer/util/google_update_settings.h"
+ #include "components/autofill/core/common/autofill_features.h"
+ #include "components/autofill/core/common/autofill_switches.h"
++#include "components/provenance_gate/browser/provenance_gate_throttle.h"
+ #include "components/blocked_content/popup_blocker.h"
+ #include "components/captive_portal/core/buildflags.h"
+ #include "components/content_settings/browser/page_specific_content_settings.h"
+@@ -5988,6 +5989,17 @@ ChromeContentBrowserClient::CreateURLLoaderThrottles(
+   Profile* profile = Profile::FromBrowserContext(browser_context);
+   DCHECK(profile);
+ 
++  // Series 0010: provenance gate. Mode switch via --provenance-mode
++  // (content_shell adaptation carries over; chrome prefs + enterprise
++  // policy templates land as a follow-up series).
++  provenance_gate::Policy pg_policy;
++  if (base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
++          "provenance-mode") == "provenance-required") {
++    pg_policy.mode = provenance_gate::Mode::kProvenanceRequired;
++  }
++  result.push_back(
++      std::make_unique<provenance_gate::ProvenanceGateThrottle>(pg_policy));
++
+   ChromeNavigationUIData* chrome_navigation_ui_data =
+       static_cast<ChromeNavigationUIData*>(navigation_ui_data);
+ 
+diff --git a/chrome/browser/chrome_content_browser_client_receiver_bindings.cc b/chrome/browser/chrome_content_browser_client_receiver_bindings.cc
+index 7d83cf933b..6d6d98a07f 100644
+--- a/chrome/browser/chrome_content_browser_client_receiver_bindings.cc
++++ b/chrome/browser/chrome_content_browser_client_receiver_bindings.cc
+@@ -5,6 +5,7 @@
+ // This file exposes services from the browser to child processes.
+ 
+ #include "base/functional/bind.h"
++#include "components/provenance_gate/browser/provenance_page_text_service.h"
+ #include "base/metrics/histogram_functions.h"
+ #include "base/task/single_thread_task_runner.h"
+ #include "build/build_config.h"
+@@ -326,6 +327,10 @@ void ChromeContentBrowserClient::RegisterBrowserInterfaceBindersForFrame(
+   chrome::internal::PopulateChromeFrameBinders(map, render_frame_host);
+   chrome::internal::PopulateChromeWebUIFrameBinders(map, render_frame_host);
+ 
++  // Series 0010: provenance gate page-text/images receiver (frame-bound).
++  map->Add<provenance_gate::mojom::ProvenancePageText>(
++      base::BindRepeating(&provenance_gate::BindProvenancePageText));
++
+ #if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+   if (!render_frame_host->GetSiteInstance()->GetSecurityPrincipal().SchemeIs(
+           extensions::kExtensionScheme)) {
+diff --git a/chrome/renderer/BUILD.gn b/chrome/renderer/BUILD.gn
+index 94d46c0511..4960a45ae6 100644
+--- a/chrome/renderer/BUILD.gn
++++ b/chrome/renderer/BUILD.gn
+@@ -119,6 +119,7 @@ static_library("renderer") {
+   defines = []
+ 
+   public_deps = [
++    "//components/provenance_gate:renderer",
+     "//components/signin/public/base:signin_buildflags",
+     "//components/touch_to_search:buildflags",
+   ]
+diff --git a/chrome/renderer/chrome_content_renderer_client.cc b/chrome/renderer/chrome_content_renderer_client.cc
+index 1cfb0d2c21..c4be7958da 100644
+--- a/chrome/renderer/chrome_content_renderer_client.cc
++++ b/chrome/renderer/chrome_content_renderer_client.cc
+@@ -77,6 +77,7 @@
+ #include "components/autofill/content/renderer/autofill_agent.h"
+ #include "components/autofill/content/renderer/password_autofill_agent.h"
+ #include "components/autofill/content/renderer/password_generation_agent.h"
++#include "components/provenance_gate/renderer/provenance_page_text_observer.h"
+ #include "components/autofill/core/common/autofill_features.h"
+ #include "components/commerce/content/renderer/commerce_web_extractor.h"
+ #include "components/content_capture/common/content_capture_features.h"
+@@ -622,6 +623,9 @@ void ChromeContentRendererClient::RenderFrameCreated(
+ 
+   new prerender::NoStatePrefetchRenderFrameObserver(render_frame);
+ 
++  // Series 0010: provenance gate renderer observer (page text + img walk).
++  new provenance_gate::ProvenancePageTextObserver(render_frame);
++
+   auto content_settings_delegate =
+       std::make_unique<ChromeContentSettingsAgentDelegate>(render_frame);
+ #if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+diff --git a/components/provenance_gate/BUILD.gn b/components/provenance_gate/BUILD.gn
+index 6262e5b4aa..abebd6b20c 100644
+--- a/components/provenance_gate/BUILD.gn
++++ b/components/provenance_gate/BUILD.gn
+@@ -26,3 +26,30 @@ source_set("unit_tests") {
+     "//testing/gtest",
+   ]
+ }
++
++source_set("browser") {
++  sources = [
++    "browser/provenance_evidence_store.cc",
++    "browser/provenance_evidence_store.h",
++    "browser/provenance_gate_throttle.cc",
++    "browser/provenance_gate_throttle.h",
++    "browser/provenance_page_inspector.cc",
++    "browser/provenance_page_inspector.h",
++    "browser/provenance_page_text_service.cc",
++    "browser/provenance_page_text_service.h",
++  ]
++  public_deps = [
++    ":provenance_gate",
++    "//components/provenance_gate/public/mojom",
++  ]
++  deps = [
++    "//base",
++    "//content/public/browser",
++    "//mojo/public/cpp/bindings",
++    "//net",
++    "//services/data_decoder/public/cpp",
++    "//services/network/public/cpp",
++    "//third_party/blink/public/common",
++    "//url",
++  ]
++}
+diff --git a/components/provenance_gate/browser/provenance_evidence_store.cc b/components/provenance_gate/browser/provenance_evidence_store.cc
+new file mode 100644
+index 0000000000..35f8e13d70
+--- /dev/null
++++ b/components/provenance_gate/browser/provenance_evidence_store.cc
+@@ -0,0 +1,32 @@
++// Copyright 2026 The yubi-OS Authors. BSD-3-Clause (matches Chromium).
++#include "components/provenance_gate/browser/provenance_evidence_store.h"
++
++#include "url/origin.h"
++
++namespace provenance_gate {
++
++ProvenanceEvidenceStore& ProvenanceEvidenceStore::Get() {
++  static base::NoDestructor<ProvenanceEvidenceStore> instance;
++  return *instance;
++}
++
++void ProvenanceEvidenceStore::RecordEvidence(
++    const GURL& page_origin,
++    Evidence evidence) {
++  const std::string key = url::Origin::Create(page_origin).Serialize();
++  base::AutoLock lock(lock_);
++  evidence_by_origin_[key].push_back(std::move(evidence));
++}
++
++std::vector<Evidence> ProvenanceEvidenceStore::GetEvidenceForOrigin(
++    const GURL& url) {
++  const std::string key = url::Origin::Create(url).Serialize();
++  base::AutoLock lock(lock_);
++  auto it = evidence_by_origin_.find(key);
++  if (it == evidence_by_origin_.end()) {
++    return {};
++  }
++  return it->second;
++}
++
++}  // namespace provenance_gate
+diff --git a/components/provenance_gate/browser/provenance_evidence_store.h b/components/provenance_gate/browser/provenance_evidence_store.h
+new file mode 100644
+index 0000000000..3a57d96cba
+--- /dev/null
++++ b/components/provenance_gate/browser/provenance_evidence_store.h
+@@ -0,0 +1,40 @@
++// Copyright 2026 The yubi-OS Authors. BSD-3-Clause (matches Chromium).
++#ifndef COMPONENTS_PROVENANCE_GATE_BROWSER_PROVENANCE_EVIDENCE_STORE_H_
++#define COMPONENTS_PROVENANCE_GATE_BROWSER_PROVENANCE_EVIDENCE_STORE_H_
++
++#include <map>
++#include <string>
++#include <vector>
++
++#include "base/no_destructor.h"
++#include "base/synchronization/lock.h"
++#include "components/provenance_gate/policy.h"
++#include "url/gurl.h"
++
++namespace provenance_gate {
++
++// Series 0008: browser-side store of detector Evidence, keyed by page
++// origin. Written by the page-image scanner (UI thread) as C2PA manifest
++// inspections complete; read by the provenance gate throttle (which runs
++// on a different sequence), hence the lock. In-memory only: evidence lives
++// for the browser process lifetime.
++// Series 0010: moved from content/shell to components so the full chrome
++// browser and content_shell share one implementation.
++class ProvenanceEvidenceStore {
++ public:
++  static ProvenanceEvidenceStore& Get();
++
++  void RecordEvidence(const GURL& page_origin, Evidence evidence);
++  std::vector<Evidence> GetEvidenceForOrigin(const GURL& url);
++
++ private:
++  friend class base::NoDestructor<ProvenanceEvidenceStore>;
++  ProvenanceEvidenceStore() = default;
++
++  base::Lock lock_;
++  std::map<std::string, std::vector<Evidence>> evidence_by_origin_;
++};
++
++}  // namespace provenance_gate
++
++#endif  // COMPONENTS_PROVENANCE_GATE_BROWSER_PROVENANCE_EVIDENCE_STORE_H_
+diff --git a/content/shell/browser/provenance_gate_throttle.cc b/components/provenance_gate/browser/provenance_gate_throttle.cc
+similarity index 50%
+rename from content/shell/browser/provenance_gate_throttle.cc
+rename to components/provenance_gate/browser/provenance_gate_throttle.cc
+index 158cc3ba22..a966cf0961 100644
+--- a/content/shell/browser/provenance_gate_throttle.cc
++++ b/components/provenance_gate/browser/provenance_gate_throttle.cc
+@@ -1,15 +1,16 @@
+ // Copyright 2026 The yubi-OS Authors. BSD-3-Clause (matches Chromium).
+-#include "content/shell/browser/provenance_gate_throttle.h"
++#include "components/provenance_gate/browser/provenance_gate_throttle.h"
++
++#include <vector>
+ 
+ #include "base/logging.h"
+-#include "content/shell/browser/provenance_page_inspector.h"
++#include "components/provenance_gate/browser/provenance_evidence_store.h"
+ #include "net/base/net_errors.h"
+ #include "url/gurl.h"
+ 
+-namespace content {
++namespace provenance_gate {
+ 
+-ProvenanceGateThrottle::ProvenanceGateThrottle(
+-    const provenance_gate::Policy& policy)
++ProvenanceGateThrottle::ProvenanceGateThrottle(const Policy& policy)
+     : policy_(policy) {}
+ 
+ ProvenanceGateThrottle::~ProvenanceGateThrottle() = default;
+@@ -20,14 +21,14 @@ void ProvenanceGateThrottle::WillProcessResponse(
+     const GURL& response_url,
+     network::mojom::URLResponseHead* response_head,
+     bool* defer) {
+-  // Series 0002 wiring: evaluate the policy. Series 0008: detector results
+-  // are recorded per-origin by the page-image scanner (C2PA manifest
+-  // inspection of the page's <img> bytes); navigations to an origin with
+-  // recorded evidence are evaluated against it. Mode A blocks on the
+-  // recorded evidence (overridable); Mode B still fails closed regardless.
+-  std::vector<provenance_gate::Evidence> evidence =
++  // Series 0008 wiring: detector results are recorded per-origin by the
++  // page-image scanner (C2PA manifest inspection of the page's <img>
++  // bytes); navigations to an origin with recorded evidence are evaluated
++  // against it. Mode A blocks on the recorded evidence (overridable); Mode
++  // B still fails closed regardless.
++  std::vector<Evidence> evidence =
+       ProvenanceEvidenceStore::Get().GetEvidenceForOrigin(response_url);
+-  const auto decision = provenance_gate::Evaluate(policy_, evidence);
++  const auto decision = Evaluate(policy_, evidence);
+   VLOG(1) << "provenance_gate: url=" << response_url.spec()
+           << " evidence=" << evidence.size()
+           << " allow=" << decision.allow
+@@ -35,12 +36,11 @@ void ProvenanceGateThrottle::WillProcessResponse(
+ 
+   // Series 0003: block action. content_shell shows its network error page
+   // (ERR_BLOCKED_BY_CLIENT); the chrome interstitial with signal/source/
+-  // confidence/proceed-anyway lands with the chrome port.
++  // confidence/proceed-anyway lands as a follow-up series.
+   if (!decision.allow) {
+     *defer = true;
+-    delegate_->CancelWithError(net::ERR_BLOCKED_BY_CLIENT,
+-                               decision.reason);
++    delegate_->CancelWithError(net::ERR_BLOCKED_BY_CLIENT, decision.reason);
+   }
+ }
+ 
+-}  // namespace content
++}  // namespace provenance_gate
+diff --git a/components/provenance_gate/browser/provenance_gate_throttle.h b/components/provenance_gate/browser/provenance_gate_throttle.h
+new file mode 100644
+index 0000000000..107d1aed8d
+--- /dev/null
++++ b/components/provenance_gate/browser/provenance_gate_throttle.h
+@@ -0,0 +1,35 @@
++// Copyright 2026 The yubi-OS Authors. BSD-3-Clause (matches Chromium).
++#ifndef COMPONENTS_PROVENANCE_GATE_BROWSER_PROVENANCE_GATE_THROTTLE_H_
++#define COMPONENTS_PROVENANCE_GATE_BROWSER_PROVENANCE_GATE_THROTTLE_H_
++
++#include "components/provenance_gate/policy.h"
++#include "third_party/blink/public/common/loader/url_loader_throttle.h"
++
++namespace provenance_gate {
++
++// Series 0002/0003: main-frame provenance gate. Evaluates the provenance
++// policy on responses and cancels loads the policy disallows. Detector
++// adapters supply Evidence via the ProvenanceEvidenceStore; with no
++// evidence Mode A allows everything, Mode B (provenance_required) fails
++// closed and cancels the load.
++// Series 0010: moved from content/shell to components so the full chrome
++// browser and content_shell share one implementation.
++class ProvenanceGateThrottle : public blink::URLLoaderThrottle {
++ public:
++  explicit ProvenanceGateThrottle(const Policy& policy);
++  ~ProvenanceGateThrottle() override;
++
++  // blink::URLLoaderThrottle:
++  void DetachFromCurrentSequence() override;
++  void WillProcessResponse(
++      const GURL& response_url,
++      network::mojom::URLResponseHead* response_head,
++      bool* defer) override;
++
++ private:
++  Policy policy_;
++};
++
++}  // namespace provenance_gate
++
++#endif  // COMPONENTS_PROVENANCE_GATE_BROWSER_PROVENANCE_GATE_THROTTLE_H_
+diff --git a/content/shell/browser/provenance_page_inspector.cc b/components/provenance_gate/browser/provenance_page_inspector.cc
+similarity index 77%
+rename from content/shell/browser/provenance_page_inspector.cc
+rename to components/provenance_gate/browser/provenance_page_inspector.cc
+index 946daafdf1..9fc2bc46b6 100644
+--- a/content/shell/browser/provenance_page_inspector.cc
++++ b/components/provenance_gate/browser/provenance_page_inspector.cc
+@@ -1,21 +1,19 @@
+ // Copyright 2026 The yubi-OS Authors. BSD-3-Clause (matches Chromium).
+-#include "content/shell/browser/provenance_page_inspector.h"
++#include "components/provenance_gate/browser/provenance_page_inspector.h"
+ 
+-#include <optional>
+ #include <utility>
+ 
+ #include "base/containers/span.h"
+ #include "base/logging.h"
++#include "components/provenance_gate/browser/provenance_evidence_store.h"
+ #include "content/public/browser/browser_context.h"
+ #include "content/public/browser/storage_partition.h"
+ #include "mojo/public/cpp/base/big_buffer.h"
+-#include "net/traffic_annotation/network_traffic_annotation.h"
+ #include "services/network/public/cpp/resource_request.h"
+-#include "services/network/public/cpp/simple_url_loader.h"
+ #include "url/gurl.h"
+ #include "url/origin.h"
+ 
+-namespace content {
++namespace provenance_gate {
+ 
+ namespace {
+ // Resource sanity guards (not policy): how many <img> elements to inspect
+@@ -24,32 +22,8 @@ constexpr size_t kMaxImagesPerScan = 10;
+ constexpr int kMaxImageBytes = 5 * 1024 * 1024;
+ }  // namespace
+ 
+-ProvenanceEvidenceStore& ProvenanceEvidenceStore::Get() {
+-  static base::NoDestructor<ProvenanceEvidenceStore> instance;
+-  return *instance;
+-}
+-
+-void ProvenanceEvidenceStore::RecordEvidence(
+-    const GURL& page_origin,
+-    provenance_gate::Evidence evidence) {
+-  const std::string key = url::Origin::Create(page_origin).Serialize();
+-  base::AutoLock lock(lock_);
+-  evidence_by_origin_[key].push_back(std::move(evidence));
+-}
+-
+-std::vector<provenance_gate::Evidence>
+-ProvenanceEvidenceStore::GetEvidenceForOrigin(const GURL& url) {
+-  const std::string key = url::Origin::Create(url).Serialize();
+-  base::AutoLock lock(lock_);
+-  auto it = evidence_by_origin_.find(key);
+-  if (it == evidence_by_origin_.end()) {
+-    return {};
+-  }
+-  return it->second;
+-}
+-
+ ProvenancePageImageScanner::ProvenancePageImageScanner(
+-    BrowserContext* browser_context)
++    content::BrowserContext* browser_context)
+     : browser_context_(browser_context),
+       decoder_(std::make_unique<data_decoder::DataDecoder>()) {}
+ 
+@@ -122,8 +96,8 @@ void ProvenancePageImageScanner::OnImageInspected(
+   if (!result->has_manifest || !result->ai_claimed) {
+     return;
+   }
+-  provenance_gate::Evidence evidence;
+-  evidence.signal = provenance_gate::Signal::kC2paUnverifiedAiAction;
++  Evidence evidence;
++  evidence.signal = Signal::kC2paUnverifiedAiAction;
+   evidence.confidence = 1.0;
+   evidence.source = "c2pa";
+   ProvenanceEvidenceStore::Get().RecordEvidence(page_origin,
+@@ -133,4 +107,4 @@ void ProvenancePageImageScanner::OnImageInspected(
+           << " signal=c2pa_unverified_ai_action";
+ }
+ 
+-}  // namespace content
++}  // namespace provenance_gate
+diff --git a/content/shell/browser/provenance_page_inspector.h b/components/provenance_gate/browser/provenance_page_inspector.h
+similarity index 57%
+rename from content/shell/browser/provenance_page_inspector.h
+rename to components/provenance_gate/browser/provenance_page_inspector.h
+index 8161da9b47..f01bf28aad 100644
+--- a/content/shell/browser/provenance_page_inspector.h
++++ b/components/provenance_gate/browser/provenance_page_inspector.h
+@@ -1,58 +1,37 @@
+ // Copyright 2026 The yubi-OS Authors. BSD-3-Clause (matches Chromium).
+-#ifndef CONTENT_SHELL_BROWSER_PROVENANCE_PAGE_INSPECTOR_H_
+-#define CONTENT_SHELL_BROWSER_PROVENANCE_PAGE_INSPECTOR_H_
++#ifndef COMPONENTS_PROVENANCE_GATE_BROWSER_PROVENANCE_PAGE_INSPECTOR_H_
++#define COMPONENTS_PROVENANCE_GATE_BROWSER_PROVENANCE_PAGE_INSPECTOR_H_
+ 
+-#include <map>
+-#include <optional>
+ #include <memory>
++#include <optional>
+ #include <string>
+ #include <vector>
+ 
+ #include "base/memory/raw_ptr.h"
+-#include "base/no_destructor.h"
+-#include "base/synchronization/lock.h"
+-#include "components/provenance_gate/policy.h"
+ #include "mojo/public/cpp/bindings/remote.h"
++#include "net/traffic_annotation/network_traffic_annotation.h"
+ #include "services/data_decoder/public/cpp/data_decoder.h"
+ #include "services/data_decoder/public/mojom/provenance_inspection.mojom.h"
+ #include "services/network/public/cpp/simple_url_loader.h"
+-#include "net/traffic_annotation/network_traffic_annotation.h"
+-#include "content/public/browser/storage_partition.h"
+ #include "url/gurl.h"
+ 
+ namespace content {
+ class BrowserContext;
++}
+ 
+-// Series 0008: browser-side store of detector Evidence, keyed by page
+-// origin. Written by the page-image scanner (UI thread) as C2PA manifest
+-// inspections complete; read by the provenance gate throttle (which runs
+-// on a different sequence), hence the lock. In-memory only: evidence lives
+-// for the browser process lifetime.
+-class ProvenanceEvidenceStore {
+- public:
+-  static ProvenanceEvidenceStore& Get();
+-
+-  void RecordEvidence(const GURL& page_origin,
+-                      provenance_gate::Evidence evidence);
+-  std::vector<provenance_gate::Evidence> GetEvidenceForOrigin(const GURL& url);
+-
+- private:
+-  friend class base::NoDestructor<ProvenanceEvidenceStore>;
+-  ProvenanceEvidenceStore() = default;
+-
+-  base::Lock lock_;
+-  std::map<std::string, std::vector<provenance_gate::Evidence>>
+-      evidence_by_origin_;
+-};
++namespace provenance_gate {
+ 
+ // Series 0008: fetches a page's <img> URLs, runs each through the sandboxed
+ // data_decoder C2PA manifest inspection (Series 0007), and records Evidence
+ // for the page origin when the manifest claims AI generation
+ // (kC2paUnverifiedAiAction). The manifest signature is NOT validated at this
+ // stage — the signal is "a manifest claims X", not "X is trusted".
++// Series 0010: moved from content/shell to components so the full chrome
++// browser and content_shell share one implementation.
+ class ProvenancePageImageScanner {
+  public:
+-  explicit ProvenancePageImageScanner(BrowserContext* browser_context);
++  explicit ProvenancePageImageScanner(
++      content::BrowserContext* browser_context);
+   ~ProvenancePageImageScanner();
+ 
+   ProvenancePageImageScanner(const ProvenancePageImageScanner&) = delete;
+@@ -70,12 +49,12 @@ class ProvenancePageImageScanner {
+                         data_decoder::mojom::ProvenanceImageInspectionPtr
+                             result);
+ 
+-  raw_ptr<BrowserContext> browser_context_;
++  raw_ptr<content::BrowserContext> browser_context_;
+   std::unique_ptr<data_decoder::DataDecoder> decoder_;
+   mojo::Remote<data_decoder::mojom::ProvenanceInspection> inspection_remote_;
+   std::vector<std::unique_ptr<network::SimpleURLLoader>> pending_loaders_;
+ };
+ 
+-}  // namespace content
++}  // namespace provenance_gate
+ 
+-#endif  // CONTENT_SHELL_BROWSER_PROVENANCE_PAGE_INSPECTOR_H_
++#endif  // COMPONENTS_PROVENANCE_GATE_BROWSER_PROVENANCE_PAGE_INSPECTOR_H_
+diff --git a/components/provenance_gate/browser/provenance_page_text_service.cc b/components/provenance_gate/browser/provenance_page_text_service.cc
+new file mode 100644
+index 0000000000..6d733358fd
+--- /dev/null
++++ b/components/provenance_gate/browser/provenance_page_text_service.cc
+@@ -0,0 +1,19 @@
++// Copyright 2026 The yubi-OS Authors. BSD-3-Clause (matches Chromium).
++#include "components/provenance_gate/browser/provenance_page_text_service.h"
++
++#include "content/public/browser/render_frame_host.h"
++#include "mojo/public/cpp/bindings/self_owned_receiver.h"
++
++namespace provenance_gate {
++
++void BindProvenancePageText(
++    content::RenderFrameHost* render_frame_host,
++    mojo::PendingReceiver<mojom::ProvenancePageText> receiver) {
++  DCHECK(render_frame_host);
++  mojo::MakeSelfOwnedReceiver(
++      std::make_unique<ProvenancePageTextImpl>(
++          render_frame_host->GetBrowserContext()),
++      std::move(receiver));
++}
++
++}  // namespace provenance_gate
+diff --git a/components/provenance_gate/browser/provenance_page_text_service.h b/components/provenance_gate/browser/provenance_page_text_service.h
+new file mode 100644
+index 0000000000..a5d0931837
+--- /dev/null
++++ b/components/provenance_gate/browser/provenance_page_text_service.h
+@@ -0,0 +1,88 @@
++// Copyright 2026 The yubi-OS Authors. BSD-3-Clause (matches Chromium).
++#ifndef COMPONENTS_PROVENANCE_GATE_BROWSER_PROVENANCE_PAGE_TEXT_SERVICE_H_
++#define COMPONENTS_PROVENANCE_GATE_BROWSER_PROVENANCE_PAGE_TEXT_SERVICE_H_
++
++#include <map>
++#include <memory>
++#include <string>
++#include <vector>
++
++#include "base/logging.h"
++#include "base/memory/raw_ptr.h"
++#include "base/no_destructor.h"
++#include "components/provenance_gate/browser/provenance_page_inspector.h"
++#include "components/provenance_gate/policy.h"
++#include "components/provenance_gate/public/mojom/provenance_gate.mojom.h"
++#include "mojo/public/cpp/bindings/pending_receiver.h"
++#include "url/gurl.h"
++
++namespace content {
++class BrowserContext;
++class RenderFrameHost;
++}
++
++namespace provenance_gate {
++
++// Series 0004: browser-side store of reported page text. UI-thread only
++// (frame-bound interfaces bind there). Detector adapters read this to build
++// Evidence.
++// Series 0010: moved from content/shell to components so the full chrome
++// browser and content_shell share one implementation.
++class ProvenancePageTextStore {
++ public:
++  static ProvenancePageTextStore& Get() {
++    static base::NoDestructor<ProvenancePageTextStore> instance;
++    return *instance;
++  }
++
++  void Record(const GURL& url, const std::string& text) {
++    const size_t chars = text.size();
++    const bool above_floor = chars >= Policy().classifier_min_chars;
++    pages_[url.spec()] = text;
++    VLOG(1) << "provenance_gate: page_text url=" << url.spec()
++            << " chars=" << chars << " above_floor=" << above_floor;
++  }
++
++ private:
++  std::map<std::string, std::string> pages_;
++};
++
++// Series 0008: receives page text and <img> URLs over mojo, records the
++// text, and hands the image URLs to the page-image scanner (browser-side
++// C2PA manifest inspection).
++class ProvenancePageTextImpl : public mojom::ProvenancePageText {
++ public:
++  explicit ProvenancePageTextImpl(content::BrowserContext* browser_context)
++      : browser_context_(browser_context) {}
++
++  void ReportPageText(const std::string& frame_url,
++                      const std::string& text) override {
++    ProvenancePageTextStore::Get().Record(GURL(frame_url), text);
++  }
++
++  void ReportPageImages(
++      const std::string& frame_url,
++      const std::vector<std::string>& image_urls) override {
++    // Series 0008: hand the page's <img> URLs to the image scanner; it
++    // fetches the bytes, runs the sandboxed C2PA manifest inspection
++    // (Series 0007), and records per-origin Evidence when the manifest
++    // claims AI generation.
++    image_scanner_ =
++        std::make_unique<ProvenancePageImageScanner>(browser_context_);
++    image_scanner_->Scan(GURL(frame_url), image_urls);
++  }
++
++ private:
++  raw_ptr<content::BrowserContext> browser_context_;
++  std::unique_ptr<ProvenancePageImageScanner> image_scanner_;
++};
++
++// Frame-bound binder: exposed via RegisterBrowserInterfaceBindersForFrame
++// by both content_shell and chrome (Series 0010 chrome integration).
++void BindProvenancePageText(
++    content::RenderFrameHost* render_frame_host,
++    mojo::PendingReceiver<mojom::ProvenancePageText> receiver);
++
++}  // namespace provenance_gate
++
++#endif  // COMPONENTS_PROVENANCE_GATE_BROWSER_PROVENANCE_PAGE_TEXT_SERVICE_H_
+diff --git a/content/shell/BUILD.gn b/content/shell/BUILD.gn
+index 9db0c7ecfa..928320791e 100644
+--- a/content/shell/BUILD.gn
++++ b/content/shell/BUILD.gn
+@@ -189,10 +189,7 @@ static_library("content_shell_lib") {
+     "browser/shell_browser_main_parts.cc",
+     "browser/shell_browser_main_parts.h",
+     "browser/shell_content_browser_client.cc",
+-      "browser/provenance_gate_throttle.h","browser/provenance_page_inspector.cc",
+-"browser/provenance_page_inspector.h",
+ 
+-      "browser/provenance_gate_throttle.cc",
+     "browser/shell_content_browser_client.h",
+     "browser/shell_content_index_provider.cc",
+     "browser/shell_content_index_provider.h",
+@@ -314,6 +311,7 @@ static_library("content_shell_lib") {
+ 
+   public_deps = [
+       "//components/provenance_gate",
++      "//components/provenance_gate:browser",
+ "//services/data_decoder/public/cpp",
+ "//services/network/public/cpp",
+       "//components/provenance_gate/public/mojom",
+diff --git a/content/shell/browser/provenance_gate_throttle.h b/content/shell/browser/provenance_gate_throttle.h
+deleted file mode 100644
+index a2c8c2ce71..0000000000
+--- a/content/shell/browser/provenance_gate_throttle.h
++++ /dev/null
+@@ -1,34 +0,0 @@
+-// Copyright 2026 The yubi-OS Authors. BSD-3-Clause (matches Chromium).
+-#ifndef CONTENT_SHELL_BROWSER_PROVENANCE_GATE_THROTTLE_H_
+-#define CONTENT_SHELL_BROWSER_PROVENANCE_GATE_THROTTLE_H_
+-
+-#include "base/memory/raw_ptr.h"
+-#include "components/provenance_gate/policy.h"
+-#include "third_party/blink/public/common/loader/url_loader_throttle.h"
+-
+-namespace content {
+-
+-// Series 0002/0003: main-frame provenance gate. Evaluates the provenance
+-// policy on main-frame HTML responses and (in a follow-up series) on
+-// subresources. Detector adapters (Series 0007) supply Evidence; until they
+-// exist the engine sees no evidence: Mode A allows everything, Mode B
+-// (provenance_required) fails closed and cancels the load.
+-class ProvenanceGateThrottle : public blink::URLLoaderThrottle {
+- public:
+-  explicit ProvenanceGateThrottle(const provenance_gate::Policy& policy);
+-  ~ProvenanceGateThrottle() override;
+-
+-  // blink::URLLoaderThrottle:
+-  void DetachFromCurrentSequence() override;
+-  void WillProcessResponse(
+-      const GURL& response_url,
+-      network::mojom::URLResponseHead* response_head,
+-      bool* defer) override;
+-
+- private:
+-  provenance_gate::Policy policy_;
+-};
+-
+-}  // namespace content
+-
+-#endif  // CONTENT_SHELL_BROWSER_PROVENANCE_GATE_THROTTLE_H_
+diff --git a/content/shell/browser/shell_content_browser_client.cc b/content/shell/browser/shell_content_browser_client.cc
+index 1b8b751598..7746c93b4f 100644
+--- a/content/shell/browser/shell_content_browser_client.cc
++++ b/content/shell/browser/shell_content_browser_client.cc
+@@ -4,10 +4,11 @@
+ 
+ #include "content/shell/browser/shell_content_browser_client.h"
+ 
+-#include "content/shell/browser/provenance_gate_throttle.h"
++#include "components/provenance_gate/browser/provenance_gate_throttle.h"
++#include "components/provenance_gate/browser/provenance_page_text_service.h"
+ #include "components/provenance_gate/public/mojom/provenance_gate.mojom.h"
+ #include "base/memory/raw_ptr.h"
+-#include "content/shell/browser/provenance_page_inspector.h"
++#include "components/provenance_gate/browser/provenance_page_inspector.h"
+ #include "mojo/public/cpp/bindings/self_owned_receiver.h"
+ #include <map>
+ #include "url/gurl.h"
+@@ -207,67 +208,6 @@ class ShellControllerImpl : public mojom::ShellController {
+ };
+ 
+ 
+-// Series 0004: browser-side store of reported page text. UI-thread only
+-// (frame-bound interfaces bind there). Detector adapters (Series 0007)
+-// will read this to build Evidence.
+-class ProvenancePageTextStore {
+- public:
+-  static ProvenancePageTextStore& Get() {
+-    static base::NoDestructor<ProvenancePageTextStore> instance;
+-    return *instance;
+-  }
+-
+-  void Record(const GURL& url, const std::string& text) {
+-    const size_t chars = text.size();
+-    const bool above_floor =
+-        chars >= provenance_gate::Policy().classifier_min_chars;
+-    pages_[url.spec()] = text;
+-    VLOG(1) << "provenance_gate: page_text url=" << url.spec()
+-            << " chars=" << chars << " above_floor=" << above_floor;
+-  }
+-
+- private:
+-  std::map<std::string, std::string> pages_;
+-};
+-
+-class ProvenancePageTextImpl
+-    : public provenance_gate::mojom::ProvenancePageText {
+- public:
+-  explicit ProvenancePageTextImpl(BrowserContext* browser_context)
+-      : browser_context_(browser_context) {}
+-
+-  void ReportPageText(const std::string& frame_url,
+-                      const std::string& text) override {
+-    ProvenancePageTextStore::Get().Record(GURL(frame_url), text);
+-  }
+-
+-  void ReportPageImages(
+-      const std::string& frame_url,
+-      const std::vector<std::string>& image_urls) override {
+-    // Series 0008: hand the page's <img> URLs to the image scanner; it
+-    // fetches the bytes, runs the sandboxed C2PA manifest inspection
+-    // (Series 0007), and records per-origin Evidence when the manifest
+-    // claims AI generation.
+-    image_scanner_ =
+-        std::make_unique<ProvenancePageImageScanner>(browser_context_);
+-    image_scanner_->Scan(GURL(frame_url), image_urls);
+-  }
+-
+- private:
+-  raw_ptr<BrowserContext> browser_context_;
+-  std::unique_ptr<ProvenancePageImageScanner> image_scanner_;
+-};
+-
+-void BindProvenancePageText(
+-    content::RenderFrameHost* render_frame_host,
+-    mojo::PendingReceiver<provenance_gate::mojom::ProvenancePageText>
+-        receiver) {
+-  DCHECK(render_frame_host);
+-  mojo::MakeSelfOwnedReceiver(
+-      std::make_unique<ProvenancePageTextImpl>(
+-          render_frame_host->GetBrowserContext()), std::move(receiver));
+-}
+-
+ void BindRustTestServiceReceiver(
+     RenderFrameHost* render_frame_host,
+     mojo::PendingReceiver<content::rust_test::mojom::RustTestService>
+@@ -492,7 +432,7 @@ ShellContentBrowserClient::CreateURLLoaderThrottles(
+   if (pg_cmd->GetSwitchValueASCII("provenance-mode") == "provenance-required") {
+     pg_policy.mode = provenance_gate::Mode::kProvenanceRequired;
+   }
+-  result.push_back(std::make_unique<ProvenanceGateThrottle>(pg_policy));
++  result.push_back(std::make_unique<provenance_gate::ProvenanceGateThrottle>(pg_policy));
+ 
+   return result;
+ }
+@@ -719,7 +659,7 @@ void ShellContentBrowserClient::RegisterBrowserInterfaceBindersForFrame(
+   map->Add<content::rust_test::mojom::RustTestService>(
+       base::BindRepeating(&BindRustTestServiceReceiver));
+   map->Add<provenance_gate::mojom::ProvenancePageText>(
+-      base::BindRepeating(&BindProvenancePageText));
++      base::BindRepeating(&provenance_gate::BindProvenancePageText));
+ #if BUILDFLAG(IS_WIN)
+   map->Add<media::mojom::MediaFoundationPreferences>(
+       &BindMediaFoundationPreferences);
