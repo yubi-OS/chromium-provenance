@@ -1,0 +1,738 @@
+From 2ece72f2faa712a73370257931721da2a6392dfd Mon Sep 17 00:00:00 2001
+From: OMNI-AGENT <foil-copy-overrate@duck.com>
+Date: Mon, 28 Sep 2026 18:45:37 -0700
+Subject: [PATCH] data_decoder: C2PA manifest inspection first cut (series
+ 0007)
+
+---
+ components/provenance_gate/policy.cc          |   9 +
+ components/provenance_gate/policy.h           |   1 +
+ components/provenance_gate/policy_unittest.cc |  14 ++
+ services/data_decoder/BUILD.gn                |   5 +
+ services/data_decoder/data_decoder_service.cc |   6 +
+ services/data_decoder/data_decoder_service.h  |   3 +
+ .../data_decoder/provenance_inspection.mojom  |  25 +++
+ .../provenance_inspection_impl.cc             |  22 ++
+ .../data_decoder/provenance_inspection_impl.h |  26 +++
+ .../provenance_manifest_parser.cc             | 208 ++++++++++++++++++
+ .../data_decoder/provenance_manifest_parser.h |  34 +++
+ .../provenance_manifest_parser_unittest.cc    | 153 +++++++++++++
+ services/data_decoder/public/mojom/BUILD.gn   |   1 +
+ .../public/mojom/data_decoder_service.mojom   |   6 +
+ .../public/mojom/provenance_inspection.mojom  |  25 +++
+ 15 files changed, 538 insertions(+)
+ create mode 100644 services/data_decoder/provenance_inspection.mojom
+ create mode 100644 services/data_decoder/provenance_inspection_impl.cc
+ create mode 100644 services/data_decoder/provenance_inspection_impl.h
+ create mode 100644 services/data_decoder/provenance_manifest_parser.cc
+ create mode 100644 services/data_decoder/provenance_manifest_parser.h
+ create mode 100644 services/data_decoder/provenance_manifest_parser_unittest.cc
+ create mode 100644 services/data_decoder/public/mojom/provenance_inspection.mojom
+
+diff --git a/components/provenance_gate/policy.cc b/components/provenance_gate/policy.cc
+index e99516e6ea..b38c8b0b7e 100644
+--- a/components/provenance_gate/policy.cc
++++ b/components/provenance_gate/policy.cc
+@@ -27,6 +27,7 @@ const char* SignalName(Signal s) {
+     case Signal::kWatermarkDetected: return "watermark_detected";
+     case Signal::kClassifierPositive: return "classifier_positive";
+     case Signal::kVerifierUnavailable: return "verifier_unavailable";
++    case Signal::kC2paUnverifiedAiAction: return "c2pa_unverified_ai_action";
+   }
+   return "unknown";
+ }
+@@ -55,6 +56,14 @@ Decision Evaluate(const Policy& policy, const std::vector<Evidence>& evidence) {
+             (!classifier_hit || e.confidence > classifier_hit->confidence))
+           classifier_hit = &e;
+         break;
++      case Signal::kC2paUnverifiedAiAction:
++        // Real detect-signal evidence in mode A: block, overridable. In
++        // mode B it never satisfies provenance-required; fall through so
++        // the strict pass rejects it as no_trusted_provenance.
++        if (!strict) {
++          return Block(e, "c2pa_unverified_ai_action", true);
++        }
++        break;
+       case Signal::kVerifierUnavailable:
+         saw_verifier_down = true;
+         break;
+diff --git a/components/provenance_gate/policy.h b/components/provenance_gate/policy.h
+index 31c91d15fa..3383f28068 100644
+--- a/components/provenance_gate/policy.h
++++ b/components/provenance_gate/policy.h
+@@ -20,6 +20,7 @@ enum class Signal {
+   kWatermarkDetected,     // Anthropic / SynthID / TrustMark / OpenAI signal
+   kClassifierPositive,    // zero-shot text classifier (Binoculars etc.)
+   kVerifierUnavailable,   // remote verifier unreachable / timed out
++  kC2paUnverifiedAiAction,  // manifest claims AI generation, signature NOT validated
+ };
+ 
+ struct Evidence {
+diff --git a/components/provenance_gate/policy_unittest.cc b/components/provenance_gate/policy_unittest.cc
+index bc9fa6dd38..ba27109bbb 100644
+--- a/components/provenance_gate/policy_unittest.cc
++++ b/components/provenance_gate/policy_unittest.cc
+@@ -101,5 +101,19 @@ TEST(ProvenanceGatePolicy, StrongestSignalWins) {
+   EXPECT_EQ(d.source, "synthid");
+ }
+ 
++TEST(ProvenanceGatePolicy, ModeA_UnverifiedC2paAiAction_BlocksOverridable) {
++  Decision d = Evaluate(Policy{}, {Ev(Signal::kC2paUnverifiedAiAction, 1.0, 0, "c2pa")});
++  EXPECT_FALSE(d.allow);
++  EXPECT_TRUE(d.overridable);
++  EXPECT_EQ(d.reason, "c2pa_unverified_ai_action");
++}
++
++TEST(ProvenanceGatePolicy, ModeB_UnverifiedC2paAiAction_NotProvenance) {
++  Policy p; p.mode = Mode::kProvenanceRequired;
++  Decision d = Evaluate(p, {Ev(Signal::kC2paUnverifiedAiAction, 1.0, 0, "c2pa")});
++  EXPECT_FALSE(d.allow);
++  EXPECT_EQ(d.reason, "no_trusted_provenance");
++}
++
+ }  // namespace
+ }  // namespace provenance_gate
+diff --git a/services/data_decoder/BUILD.gn b/services/data_decoder/BUILD.gn
+index e383a5d2f5..b9cde9c24e 100644
+--- a/services/data_decoder/BUILD.gn
++++ b/services/data_decoder/BUILD.gn
+@@ -25,6 +25,10 @@ source_set("lib") {
+     "structured_headers_parser_impl.h",
+     "xml_parser.cc",
+     "xml_parser.h",
++    "provenance_inspection_impl.cc",
++    "provenance_inspection_impl.h",
++    "provenance_manifest_parser.cc",
++    "provenance_manifest_parser.h",
+   ]
+ 
+   configs += [ "//build/config/compiler:wexit_time_destructors" ]
+@@ -68,6 +72,7 @@ source_set("tests") {
+     "public/cpp/xml_dom_unittest.cc",
+     "xml/xml_parser_rs_unittest.cc",
+     "xml_parser_unittest.cc",
++    "provenance_manifest_parser_unittest.cc",
+   ]
+ 
+   deps = [
+diff --git a/services/data_decoder/data_decoder_service.cc b/services/data_decoder/data_decoder_service.cc
+index 8e762117c7..b9af3dac8b 100644
+--- a/services/data_decoder/data_decoder_service.cc
++++ b/services/data_decoder/data_decoder_service.cc
+@@ -18,6 +18,7 @@
+ #include "services/data_decoder/public/mojom/image_decoder.mojom.h"
+ #include "services/data_decoder/structured_headers_parser_impl.h"
+ #include "services/data_decoder/xml_parser.h"
++#include "services/data_decoder/provenance_inspection_impl.h"
+ 
+ #if BUILDFLAG(USE_BLINK)
+ #include "services/data_decoder/image_decoder_impl.h"
+@@ -54,6 +55,11 @@ void DataDecoderService::BindStructuredHeadersParser(
+   mojo::MakeSelfOwnedReceiver(std::make_unique<StructuredHeadersParserImpl>(),
+                               std::move(receiver));
+ }
++void DataDecoderService::BindProvenanceInspection(
++    mojo::PendingReceiver<mojom::ProvenanceInspection> receiver) {
++  mojo::MakeSelfOwnedReceiver(std::make_unique<ProvenanceInspectionImpl>(),
++                              std::move(receiver));
++}
+ 
+ void DataDecoderService::BindXmlParser(
+     mojo::PendingReceiver<mojom::XmlParser> receiver) {
+diff --git a/services/data_decoder/data_decoder_service.h b/services/data_decoder/data_decoder_service.h
+index f9682f5a03..433b4382ef 100644
+--- a/services/data_decoder/data_decoder_service.h
++++ b/services/data_decoder/data_decoder_service.h
+@@ -14,6 +14,7 @@
+ #include "services/data_decoder/public/mojom/image_decoder.mojom.h"
+ #include "services/data_decoder/public/mojom/structured_headers_parser.mojom.h"
+ #include "services/data_decoder/public/mojom/xml_parser.mojom.h"
++#include "services/data_decoder/public/mojom/provenance_inspection.mojom.h"
+ 
+ namespace data_decoder {
+ 
+@@ -39,6 +40,8 @@ class DataDecoderService : public mojom::DataDecoderService {
+       mojo::PendingReceiver<mojom::ImageDecoder> receiver) override;
+   void BindStructuredHeadersParser(
+       mojo::PendingReceiver<mojom::StructuredHeadersParser> receiver) override;
++  void BindProvenanceInspection(
++      mojo::PendingReceiver<mojom::ProvenanceInspection> receiver) override;
+   void BindXmlParser(mojo::PendingReceiver<mojom::XmlParser> receiver) override;
+   void BindWebBundleParserFactory(
+       mojo::PendingReceiver<web_package::mojom::WebBundleParserFactory>
+diff --git a/services/data_decoder/provenance_inspection.mojom b/services/data_decoder/provenance_inspection.mojom
+new file mode 100644
+index 0000000000..62ce310450
+--- /dev/null
++++ b/services/data_decoder/provenance_inspection.mojom
+@@ -0,0 +1,25 @@
++// Copyright 2026 The yubi-OS Authors. BSD-3-Clause (matches Chromium).
++
++module data_decoder.mojom;
++
++import "mojo/public/mojom/base/big_buffer.mojom";
++
++// Series 0007: image provenance inspection in the sandboxed data_decoder
++// utility process. First cut: detects C2PA manifests (JPEG APP11/JUMBF, PNG
++// caBX chunks) and extracts the action names the manifest claims. The
++// manifest signature is NOT validated here: a positive result means
++// "a manifest claims X", never "X is trusted". Signature/trust validation
++// lands with the vendored c2pa-rs follow-up (SERIES.md 0007).
++struct ProvenanceImageInspection {
++  // A C2PA JUMBF manifest was found.
++  bool has_manifest;
++  // Action URIs the manifest claims (e.g. c2pa.actions/trainedAlgorithmicMedia).
++  array<string> claimed_actions;
++  // Parser notes (container type, bytes scanned, errors).
++  string detail;
++};
++
++interface ProvenanceInspection {
++  InspectImage(mojo_base.mojom.BigBuffer data)
++      => (ProvenanceImageInspection result);
++};
+diff --git a/services/data_decoder/provenance_inspection_impl.cc b/services/data_decoder/provenance_inspection_impl.cc
+new file mode 100644
+index 0000000000..4460f159db
+--- /dev/null
++++ b/services/data_decoder/provenance_inspection_impl.cc
+@@ -0,0 +1,22 @@
++// Copyright 2026 The yubi-OS Authors. BSD-3-Clause (matches Chromium).
++#include "services/data_decoder/provenance_inspection_impl.h"
++
++#include <utility>
++
++#include "mojo/public/cpp/base/big_buffer.h"
++#include "services/data_decoder/provenance_manifest_parser.h"
++
++namespace data_decoder {
++
++void ProvenanceInspectionImpl::InspectImage(mojo_base::BigBuffer data,
++                                            InspectImageCallback callback) {
++  auto result = mojom::ProvenanceImageInspection::New();
++  const ProvenanceManifest manifest =
++      InspectProvenance(data.data(), data.size());
++  result->has_manifest = manifest.found;
++  result->claimed_actions = manifest.claimed_actions;
++  result->detail = manifest.detail;
++  std::move(callback).Run(std::move(result));
++}
++
++}  // namespace data_decoder
+diff --git a/services/data_decoder/provenance_inspection_impl.h b/services/data_decoder/provenance_inspection_impl.h
+new file mode 100644
+index 0000000000..90acf4babc
+--- /dev/null
++++ b/services/data_decoder/provenance_inspection_impl.h
+@@ -0,0 +1,26 @@
++// Copyright 2026 The yubi-OS Authors. BSD-3-Clause (matches Chromium).
++#ifndef SERVICES_DATA_DECODER_PROVENANCE_INSPECTION_IMPL_H_
++#define SERVICES_DATA_DECODER_PROVENANCE_INSPECTION_IMPL_H_
++
++#include "services/data_decoder/public/mojom/provenance_inspection.mojom.h"
++
++namespace data_decoder {
++
++// Series 0007: mojom glue over the std-only provenance manifest parser.
++// Runs in the sandboxed data_decoder utility process.
++class ProvenanceInspectionImpl : public mojom::ProvenanceInspection {
++ public:
++  ProvenanceInspectionImpl() = default;
++  ~ProvenanceInspectionImpl() override = default;
++
++  ProvenanceInspectionImpl(const ProvenanceInspectionImpl&) = delete;
++  ProvenanceInspectionImpl& operator=(const ProvenanceInspectionImpl&) = delete;
++
++  // mojom::ProvenanceInspection:
++  void InspectImage(mojo_base::BigBuffer data,
++                    InspectImageCallback callback) override;
++};
++
++}  // namespace data_decoder
++
++#endif  // SERVICES_DATA_DECODER_PROVENANCE_INSPECTION_IMPL_H_
+diff --git a/services/data_decoder/provenance_manifest_parser.cc b/services/data_decoder/provenance_manifest_parser.cc
+new file mode 100644
+index 0000000000..2edd0a326f
+--- /dev/null
++++ b/services/data_decoder/provenance_manifest_parser.cc
+@@ -0,0 +1,208 @@
++// Copyright 2026 The yubi-OS Authors. BSD-3-Clause (matches Chromium).
++#include "services/data_decoder/provenance_manifest_parser.h"
++
++#include <string>
++#include <vector>
++
++namespace data_decoder {
++
++namespace {
++
++// JUMBF-in-JPEG segments may carry an 11-byte chunk header each; if the
++// concatenated APP11 stream does not parse as boxes, we retry past one
++// header.
++constexpr size_t kJumbfChunkHeaderSize = 11;
++
++bool FourCc(const uint8_t* p, const char* s) {
++  for (int i = 0; i < 4; i++) {
++    if (p[i] != static_cast<uint8_t>(s[i])) {
++      return false;
++    }
++  }
++  return true;
++}
++
++uint32_t ReadBe32(const uint8_t* p) {
++  return (static_cast<uint32_t>(p[0]) << 24) |
++         (static_cast<uint32_t>(p[1]) << 16) |
++         (static_cast<uint32_t>(p[2]) << 8) | static_cast<uint32_t>(p[3]);
++}
++
++// Collects the payload bytes of every JPEG APP11 segment (the JUMBF carrier
++// per C2PA). Walks markers from the SOI; stops at SOS/EOI/truncation.
++std::vector<uint8_t> CollectJpegApp11(const uint8_t* data, size_t size,
++                                      size_t* segments) {
++  std::vector<uint8_t> out;
++  *segments = 0;
++  size_t off = 2;  // past SOI
++  while (off + 4 <= size) {
++    if (data[off] != 0xFF) {
++      break;
++    }
++    const uint8_t marker = data[off + 1];
++    if (marker == 0x01 || (marker >= 0xD0 && marker <= 0xD9)) {
++      if (marker == 0xD9) {
++        break;  // EOI
++      }
++      off += 2;
++      continue;
++    }
++    const uint32_t seg_len = (static_cast<uint32_t>(data[off + 2]) << 8) |
++                             static_cast<uint32_t>(data[off + 3]);
++    if (seg_len < 2 || off + 2 + seg_len > size) {
++      break;  // truncated: stop scanning
++    }
++    if (marker == 0xEB) {  // APP11
++      out.insert(out.end(), data + off + 4, data + off + 2 + seg_len);
++      (*segments)++;
++    }
++    off += 2 + seg_len;
++    if (marker == 0xDA) {
++      break;  // entropy-coded data follows; no more APP11
++    }
++  }
++  return out;
++}
++
++// Collects caBX chunk payloads (C2PA JUMBF carrier in PNG).
++std::vector<uint8_t> CollectPngCaBx(const uint8_t* data, size_t size,
++                                    size_t* chunks) {
++  std::vector<uint8_t> out;
++  *chunks = 0;
++  static const uint8_t kPngSig[8] = {0x89, 0x50, 0x4E, 0x47,
++                                     0x0D, 0x0A, 0x1A, 0x0A};
++  if (size < 8) {
++    return out;
++  }
++  for (int i = 0; i < 8; i++) {
++    if (data[i] != kPngSig[i]) {
++      return out;
++    }
++  }
++  size_t off = 8;
++  while (off + 12 <= size) {
++    const uint32_t len = ReadBe32(data + off);
++    if (off + 8 + len + 4 > size) {
++      break;  // truncated
++    }
++    const uint8_t* type = data + off + 4;
++    if (FourCc(type, "caBX")) {
++      out.insert(out.end(), data + off + 8, data + off + 8 + len);
++      (*chunks)++;
++    }
++    if (FourCc(type, "IEND")) {
++      break;
++    }
++    off += 8 + len + 4;
++  }
++  return out;
++}
++
++// Depth-limited JUMBF box walk collecting every "json" content-box payload.
++void WalkBoxes(const uint8_t* p, size_t size, int depth,
++               std::vector<std::string>* json_payloads) {
++  if (depth > 8) {
++    return;
++  }
++  size_t off = 0;
++  while (off + 8 <= size) {
++    const uint32_t len = ReadBe32(p + off);
++    if (len < 8 || off + len > size) {
++      return;  // implausible box: stop walking
++    }
++    const uint8_t* type = p + off + 4;
++    if (FourCc(type, "json")) {
++      json_payloads->emplace_back(reinterpret_cast<const char*>(p + off + 8),
++                                  len - 8);
++    } else if (FourCc(type, "jumd") || FourCc(type, "jumb")) {
++      WalkBoxes(p + off + 8, len - 8, depth + 1, json_payloads);
++    }
++    off += len;
++  }
++}
++
++// Extracts every "action":"..." string value that looks like a C2PA action
++// URI. Minimal extraction, no JSON dependency.
++void ExtractActions(const std::string& json, std::vector<std::string>* out) {
++  const std::string key = "\"action\"";
++  size_t pos = 0;
++  while ((pos = json.find(key, pos)) != std::string::npos) {
++    const size_t colon = json.find(':', pos + key.size());
++    if (colon == std::string::npos) {
++      break;
++    }
++    const size_t q1 = json.find('"', colon);
++    if (q1 == std::string::npos) {
++      break;
++    }
++    std::string value;
++    size_t i = q1 + 1;
++    while (i < json.size() && json[i] != '"') {
++      if (json[i] == '\\' && i + 1 < json.size()) {
++        value += json[i];
++        value += json[i + 1];
++        i += 2;
++        continue;
++      }
++      value += json[i];
++      i++;
++    }
++    if (i >= json.size()) {
++      break;
++    }
++    if (!value.empty() && value.find("c2pa.actions/") != std::string::npos) {
++      out->push_back(value);
++    }
++    pos = i;
++  }
++}
++
++}  // namespace
++
++ProvenanceManifest InspectProvenance(const uint8_t* data, size_t size) {
++  ProvenanceManifest m;
++  std::vector<uint8_t> jumbf;
++  if (size >= 2 && data[0] == 0xFF && data[1] == 0xD8) {
++    size_t segments = 0;
++    jumbf = CollectJpegApp11(data, size, &segments);
++    m.detail = "jpeg app11 segments=" + std::to_string(segments) +
++               " jumbf_bytes=" + std::to_string(jumbf.size());
++  } else if (size >= 8 && data[0] == 0x89 && data[1] == 0x50) {
++    size_t chunks = 0;
++    jumbf = CollectPngCaBx(data, size, &chunks);
++    m.detail = "png caBX chunks=" + std::to_string(chunks) +
++               " jumbf_bytes=" + std::to_string(jumbf.size());
++  } else {
++    m.detail = "container not recognized";
++    return m;
++  }
++  if (jumbf.empty()) {
++    m.detail += "; no jumbf payload";
++    return m;
++  }
++
++  std::vector<std::string> jsons;
++  // JUMBF-in-JPEG chunk headers observed in the wild: none (offset 0),
++  // 8-byte "JP" + version + chunk-index header (c2pa-rs writer), or the
++  // 11-byte ISO variant. Try each; first framing that yields boxes wins.
++  static const size_t kHeaderSkips[] = {0, 8, 11};
++  for (size_t skip : kHeaderSkips) {
++    if (jumbf.size() <= skip) {
++      break;
++    }
++    jsons.clear();
++    WalkBoxes(jumbf.data() + skip, jumbf.size() - skip, 0, &jsons);
++    if (!jsons.empty()) {
++      m.detail += " (header-skip=" + std::to_string(skip) + ")";
++      break;
++    }
++  }
++
++  m.found = !jsons.empty();
++  for (const std::string& j : jsons) {
++    ExtractActions(j, &m.claimed_actions);
++  }
++  return m;
++}
++
++}  // namespace data_decoder
+\ No newline at end of file
+diff --git a/services/data_decoder/provenance_manifest_parser.h b/services/data_decoder/provenance_manifest_parser.h
+new file mode 100644
+index 0000000000..6ef9087cc1
+--- /dev/null
++++ b/services/data_decoder/provenance_manifest_parser.h
+@@ -0,0 +1,34 @@
++// Copyright 2026 The yubi-OS Authors. BSD-3-Clause (matches Chromium).
++#ifndef SERVICES_DATA_DECODER_PROVENANCE_MANIFEST_PARSER_H_
++#define SERVICES_DATA_DECODER_PROVENANCE_MANIFEST_PARSER_H_
++
++#include <cstddef>
++#include <cstdint>
++#include <string>
++#include <vector>
++
++namespace data_decoder {
++
++// Series 0007, first cut: std-only C2PA manifest detector. Pure function, no
++// base/ dependencies, so it is standalone-testable without a Chromium build
++// (see provenance_manifest_parser_unittest.cc, -DSTANDALONE_TEST).
++//
++// Containers understood:
++//  - JPEG: APP11 (0xFFEB) segments carrying the JUMBF (ISO 19566-5) stream
++//  - PNG: caBX chunks carrying the JUMBF stream
++//
++// The manifest signature is NOT validated: this reports what the manifest
++// CLAIMS only. Callers must not treat it as trusted provenance.
++struct ProvenanceManifest {
++  bool found = false;
++  std::vector<std::string> claimed_actions;  // c2pa.actions/... URIs
++  std::string detail;                        // parser notes
++};
++
++// Scans |data| for an embedded C2PA manifest. Never reads out of bounds on
++// malformed input and never throws.
++ProvenanceManifest InspectProvenance(const uint8_t* data, size_t size);
++
++}  // namespace data_decoder
++
++#endif  // SERVICES_DATA_DECODER_PROVENANCE_MANIFEST_PARSER_H_
+diff --git a/services/data_decoder/provenance_manifest_parser_unittest.cc b/services/data_decoder/provenance_manifest_parser_unittest.cc
+new file mode 100644
+index 0000000000..5f9321813a
+--- /dev/null
++++ b/services/data_decoder/provenance_manifest_parser_unittest.cc
+@@ -0,0 +1,153 @@
++// Copyright 2026 The yubi-OS Authors. BSD-3-Clause (matches Chromium).
++// Builds under Chromium's gtest AND standalone (-DSTANDALONE_TEST) so the
++// parser can be exercised on the box without a full test-suite build.
++#include "services/data_decoder/provenance_manifest_parser.h"
++
++#ifdef STANDALONE_TEST
++#include <cassert>
++#include <cstdio>
++#include <string>
++#include <vector>
++#define TEST(a, b) static void a##_##b(); [[maybe_unused]] static int a##_##b##_reg = (a##_##b(), 0); static void a##_##b()
++#define EXPECT_TRUE(x) assert(x)
++#define EXPECT_FALSE(x) assert(!(x))
++#define EXPECT_EQ(a, b) assert((a) == (b))
++int main() { std::puts("provenance_manifest_parser tests: PASS"); return 0; }
++#else
++#include "testing/gtest/include/gtest/gtest.h"
++#endif
++
++namespace data_decoder {
++namespace {
++
++std::vector<uint8_t> Bytes(const std::string& s) {
++  return std::vector<uint8_t>(s.begin(), s.end());
++}
++
++std::vector<uint8_t> MakeBox(const char* type,
++                             const std::vector<uint8_t>& payload) {
++  std::vector<uint8_t> v;
++  const uint32_t len = static_cast<uint32_t>(payload.size() + 8);
++  v.push_back((len >> 24) & 0xFF);
++  v.push_back((len >> 16) & 0xFF);
++  v.push_back((len >> 8) & 0xFF);
++  v.push_back(len & 0xFF);
++  for (int i = 0; i < 4; i++) {
++    v.push_back(static_cast<uint8_t>(type[i]));
++  }
++  v.insert(v.end(), payload.begin(), payload.end());
++  return v;
++}
++
++// Minimal JUMBF: one "jumd" superbox wrapping one "json" content box.
++std::vector<uint8_t> JumbfWithJson(const std::string& json) {
++  return MakeBox("jumd", MakeBox("json", Bytes(json)));
++}
++
++std::vector<uint8_t> JpegWithApp11(const std::vector<uint8_t>& jumbf) {
++  std::vector<uint8_t> v = {0xFF, 0xD8};  // SOI
++  const uint32_t seg = static_cast<uint32_t>(jumbf.size() + 2);
++  v.push_back(0xFF);
++  v.push_back(0xEB);  // APP11
++  v.push_back((seg >> 8) & 0xFF);
++  v.push_back(seg & 0xFF);
++  v.insert(v.end(), jumbf.begin(), jumbf.end());
++  v.push_back(0xFF);
++  v.push_back(0xD9);  // EOI
++  return v;
++}
++
++std::vector<uint8_t> PngWithCaBx(const std::vector<uint8_t>& jumbf) {
++  std::vector<uint8_t> v = {0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A};
++  auto push32 = [&v](uint32_t x) {
++    v.push_back((x >> 24) & 0xFF);
++    v.push_back((x >> 16) & 0xFF);
++    v.push_back((x >> 8) & 0xFF);
++    v.push_back(x & 0xFF);
++  };
++  push32(static_cast<uint32_t>(jumbf.size()));
++  v.insert(v.end(), {'c', 'a', 'B', 'X'});
++  v.insert(v.end(), jumbf.begin(), jumbf.end());
++  push32(0);  // CRC placeholder; the parser ignores CRC
++  push32(0);  // IEND chunk length 0
++  v.insert(v.end(), {'I', 'E', 'N', 'D'});
++  return v;
++}
++
++const char* kAiJson =
++    "{\"actions\":{\"actions\":[{\"action\":\"c2pa.actions/"
++    "trainedAlgorithmicMedia\"}]}}";
++
++TEST(ProvenanceManifestParser, JpegApp11_ManifestFoundWithAction) {
++  auto jpeg = JpegWithApp11(JumbfWithJson(kAiJson));
++  ProvenanceManifest m = InspectProvenance(jpeg.data(), jpeg.size());
++  EXPECT_TRUE(m.found);
++  EXPECT_EQ(m.claimed_actions.size(), 1u);
++  EXPECT_EQ(m.claimed_actions[0], "c2pa.actions/trainedAlgorithmicMedia");
++}
++
++TEST(ProvenanceManifestParser, Jpeg_NoApp11_NoManifest) {
++  std::vector<uint8_t> jpeg = {0xFF, 0xD8, 0xFF, 0xD9};
++  ProvenanceManifest m = InspectProvenance(jpeg.data(), jpeg.size());
++  EXPECT_FALSE(m.found);
++  EXPECT_TRUE(m.claimed_actions.empty());
++}
++
++TEST(ProvenanceManifestParser, Jpeg_PlainAppSegment_NoJson) {
++  std::vector<uint8_t> v = {0xFF, 0xD8};
++  v.push_back(0xFF);
++  v.push_back(0xE1);
++  v.push_back(0x00);
++  v.push_back(0x04);  // APP1, length 4, empty payload
++  v.push_back(0xFF);
++  v.push_back(0xD9);
++  ProvenanceManifest m = InspectProvenance(v.data(), v.size());
++  EXPECT_FALSE(m.found);
++}
++
++TEST(ProvenanceManifestParser, Png_CaBx_ManifestFound) {
++  auto png = PngWithCaBx(JumbfWithJson(kAiJson));
++  ProvenanceManifest m = InspectProvenance(png.data(), png.size());
++  EXPECT_TRUE(m.found);
++  EXPECT_EQ(m.claimed_actions.size(), 1u);
++}
++
++TEST(ProvenanceManifestParser, Png_NoCaBx_NoManifest) {
++  std::vector<uint8_t> png = {0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A};
++  ProvenanceManifest m = InspectProvenance(png.data(), png.size());
++  EXPECT_FALSE(m.found);
++}
++
++TEST(ProvenanceManifestParser, MultipleActions_AllExtracted) {
++  std::string json =
++      "{\"actions\":{\"actions\":["
++      "{\"action\":\"c2pa.actions/edited\"},"
++      "{\"action\":\"c2pa.actions/trainedAlgorithmicMedia\"}]}}";
++  auto jpeg = JpegWithApp11(JumbfWithJson(json));
++  ProvenanceManifest m = InspectProvenance(jpeg.data(), jpeg.size());
++  EXPECT_TRUE(m.found);
++  EXPECT_EQ(m.claimed_actions.size(), 2u);
++}
++
++TEST(ProvenanceManifestParser, JsonWithoutActions_FoundButEmpty) {
++  auto jpeg = JpegWithApp11(JumbfWithJson("{\"note\":\"no actions here\"}"));
++  ProvenanceManifest m = InspectProvenance(jpeg.data(), jpeg.size());
++  EXPECT_TRUE(m.found);
++  EXPECT_TRUE(m.claimed_actions.empty());
++}
++
++TEST(ProvenanceManifestParser, TruncatedJpeg_Safe) {
++  auto jpeg = JpegWithApp11(JumbfWithJson(kAiJson));
++  jpeg.resize(jpeg.size() / 2);  // cut mid-stream
++  ProvenanceManifest m = InspectProvenance(jpeg.data(), jpeg.size());
++  EXPECT_FALSE(m.found);
++}
++
++TEST(ProvenanceManifestParser, Garbage_Safe) {
++  std::vector<uint8_t> junk(4096, 0xAB);
++  ProvenanceManifest m = InspectProvenance(junk.data(), junk.size());
++  EXPECT_FALSE(m.found);
++}
++
++}  // namespace
++}  // namespace data_decoder
+\ No newline at end of file
+diff --git a/services/data_decoder/public/mojom/BUILD.gn b/services/data_decoder/public/mojom/BUILD.gn
+index 05a3f54657..bab7d3dfb2 100644
+--- a/services/data_decoder/public/mojom/BUILD.gn
++++ b/services/data_decoder/public/mojom/BUILD.gn
+@@ -9,6 +9,7 @@ mojom("mojom") {
+     "data_decoder_service.mojom",
+     "gzipper.mojom",
+     "image_decoder.mojom",
++    "provenance_inspection.mojom",
+     "structured_headers_parser.mojom",
+   ]
+ 
+diff --git a/services/data_decoder/public/mojom/data_decoder_service.mojom b/services/data_decoder/public/mojom/data_decoder_service.mojom
+index 32dca78f7e..b6f611cc95 100644
+--- a/services/data_decoder/public/mojom/data_decoder_service.mojom
++++ b/services/data_decoder/public/mojom/data_decoder_service.mojom
+@@ -11,6 +11,7 @@ import "services/data_decoder/public/mojom/gzipper.mojom";
+ import "services/data_decoder/public/mojom/image_decoder.mojom";
+ import "services/data_decoder/public/mojom/structured_headers_parser.mojom";
+ import "services/data_decoder/public/mojom/xml_parser.mojom";
++import "services/data_decoder/public/mojom/provenance_inspection.mojom";
+ 
+ // The main interface to the Data Decoder service.
+ //
+@@ -38,6 +39,11 @@ interface DataDecoderService {
+   BindStructuredHeadersParser(
+       pending_receiver<StructuredHeadersParser> receiver);
+ 
++  // Binds an interface which can inspect images for embedded C2PA
++  // provenance manifests (Series 0007; first cut: unverified claims only).
++  BindProvenanceInspection(
++      pending_receiver<ProvenanceInspection> receiver);
++
+   // Binds an interface which can be used to validate the format PIX code
+   // strings.
+   BindPixCodeValidator(
+diff --git a/services/data_decoder/public/mojom/provenance_inspection.mojom b/services/data_decoder/public/mojom/provenance_inspection.mojom
+new file mode 100644
+index 0000000000..62ce310450
+--- /dev/null
++++ b/services/data_decoder/public/mojom/provenance_inspection.mojom
+@@ -0,0 +1,25 @@
++// Copyright 2026 The yubi-OS Authors. BSD-3-Clause (matches Chromium).
++
++module data_decoder.mojom;
++
++import "mojo/public/mojom/base/big_buffer.mojom";
++
++// Series 0007: image provenance inspection in the sandboxed data_decoder
++// utility process. First cut: detects C2PA manifests (JPEG APP11/JUMBF, PNG
++// caBX chunks) and extracts the action names the manifest claims. The
++// manifest signature is NOT validated here: a positive result means
++// "a manifest claims X", never "X is trusted". Signature/trust validation
++// lands with the vendored c2pa-rs follow-up (SERIES.md 0007).
++struct ProvenanceImageInspection {
++  // A C2PA JUMBF manifest was found.
++  bool has_manifest;
++  // Action URIs the manifest claims (e.g. c2pa.actions/trainedAlgorithmicMedia).
++  array<string> claimed_actions;
++  // Parser notes (container type, bytes scanned, errors).
++  string detail;
++};
++
++interface ProvenanceInspection {
++  InspectImage(mojo_base.mojom.BigBuffer data)
++      => (ProvenanceImageInspection result);
++};
+-- 
+2.53.0
+
