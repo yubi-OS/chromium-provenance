@@ -1,0 +1,81 @@
+name: Release content_shell bundle
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (e.g. content-shell-v0.1.0)'
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: chromium-high-mem
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: [self-hosted, Linux, ARM64, HIGH-MEM]
+    timeout-minutes: 60
+    steps:
+      - name: Package runtime bundle
+        run: |
+          set -euo pipefail
+          cd /home/ubuntu/chromium-build/src/out/arm64-qual
+          STAGE=/tmp/release-bundle
+          rm -rf "$STAGE"; mkdir -p "$STAGE/lib"
+          cp content_shell "$STAGE/"
+          ldd ./content_shell 2>/dev/null | awk '{print $3}' \
+            | grep '^/home/ubuntu/chromium-build' | sort -u > /tmp/needed-libs.txt
+          echo "bundling $(wc -l < /tmp/needed-libs.txt) chromium libs"
+          while read -r L; do cp -P "$L" "$STAGE/lib/"; done < /tmp/needed-libs.txt
+          for F in icudtl.dat v8_context_snapshot.bin *.pak; do
+            [ -e "$F" ] && cp "$F" "$STAGE/" || true
+          done
+          [ -d locales ] && cp -r locales "$STAGE/locales" || true
+          cd /home/ubuntu/chromium-build/src
+          SHA=$(git rev-parse HEAD)
+          DATE=$(date -u +%FT%TZ)
+          {
+            echo "artifact: content_shell (provenance-gated Chromium 153.0.8010.36)"
+            echo "built-from: yubi-OS/chromium fork commit $SHA (branch $(git rev-parse --abbrev-ref HEAD))"
+            echo "built-on: ubuntu HIGH-MEM aarch64, $DATE"
+            echo "overlay: yubi-OS/chromium-provenance patches/0001-0007"
+            echo "policy: --provenance-mode=block_on_detect|provenance_required"
+            echo "system-libs: not bundled; provided by the distro (asound, atk, cairo, ...)"
+          } > "$STAGE/provenance.txt"
+          cd "$STAGE"
+          find . -type f | sort | while read -r F; do sha256sum "$F"; done > MANIFEST.sha256
+          cd /tmp
+          rm -f bundle.tar.zst
+          tar --zstd -cf bundle.tar.zst -C /tmp release-bundle
+          sha256sum bundle.tar.zst | tee bundle.sha256
+          {
+            echo "## content_shell (provenance-gated) — ${{ inputs.tag }}"
+            echo ""
+            cat /tmp/release-bundle/provenance.txt
+            echo ""
+            echo "### Bundle digest"
+            echo '```'
+            cat bundle.sha256
+            echo '```'
+            echo "### Usage"
+            echo '```'
+            echo "tar --zstd -xf bundle.tar.zst"
+            echo "cd release-bundle && ./content_shell --ozone-platform=headless --provenance-mode=block_on_detect <url>"
+            echo '```'
+          } > /tmp/notes.md
+
+      - name: Create release and upload asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd /tmp
+          gh release create "${{ inputs.tag }}" \
+            bundle.tar.zst \
+            --repo yubi-OS/chromium-provenance \
+            --target main \
+            --title "content_shell (provenance-gated) ${{ inputs.tag }}" \
+            --notes-file /tmp/notes.md
+          gh release view "${{ inputs.tag }}" --repo yubi-OS/chromium-provenance --json assets -q '.assets[].name'
