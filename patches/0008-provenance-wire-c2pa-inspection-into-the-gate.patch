@@ -1,0 +1,541 @@
+From 47bf3742f5f9d903c9675ed3395f104bc2437890 Mon Sep 17 00:00:00 2001
+From: OMNI-AGENT <foil-copy-overrate@duck.com>
+Date: Tue, 29 Sep 2026 04:42:42 -0700
+Subject: [PATCH] provenance: wire C2PA inspection into the gate (series 0008)
+
+---
+ .../public/mojom/provenance_gate.mojom        |   7 +
+ .../renderer/provenance_page_text_observer.cc |  33 +++++
+ content/shell/BUILD.gn                        |   6 +-
+ .../shell/browser/provenance_gate_throttle.cc |  15 +-
+ .../browser/provenance_page_inspector.cc      | 136 ++++++++++++++++++
+ .../shell/browser/provenance_page_inspector.h |  81 +++++++++++
+ .../browser/shell_content_browser_client.cc   |  24 +++-
+ .../provenance_inspection_impl.cc             |   1 +
+ .../provenance_manifest_parser.cc             |   7 +
+ .../data_decoder/provenance_manifest_parser.h |   6 +
+ .../provenance_manifest_parser_unittest.cc    |  18 +++
+ .../public/mojom/provenance_inspection.mojom  |   2 +
+ 12 files changed, 328 insertions(+), 8 deletions(-)
+ create mode 100644 content/shell/browser/provenance_page_inspector.cc
+ create mode 100644 content/shell/browser/provenance_page_inspector.h
+
+diff --git a/components/provenance_gate/public/mojom/provenance_gate.mojom b/components/provenance_gate/public/mojom/provenance_gate.mojom
+index 628206255b..77af7e2953 100644
+--- a/components/provenance_gate/public/mojom/provenance_gate.mojom
++++ b/components/provenance_gate/public/mojom/provenance_gate.mojom
+@@ -5,8 +5,15 @@ module provenance_gate.mojom;
+ // Series 0004: the renderer reports extracted main-content text to the
+ // browser process. Detector adapters (Series 0007) evaluate the text and
+ // feed Evidence to the policy engine.
++// Series 0008: also reports <img> source URLs so the browser can run the
++// sandboxed C2PA manifest inspection over the image bytes and record
++// per-origin Evidence.
+ interface ProvenancePageText {
+   // |frame_url| is the reported frame URL, |text| its extracted
+   // main-content text (renderer-capped at a message-size guard).
+   ReportPageText(string frame_url, string text);
++
++  // Series 0008: |image_urls| are absolute http(s) URLs of <img> elements
++  // in the frame's DOM (renderer-capped at a count guard).
++  ReportPageImages(string frame_url, array<string> image_urls);
+ };
+diff --git a/components/provenance_gate/renderer/provenance_page_text_observer.cc b/components/provenance_gate/renderer/provenance_page_text_observer.cc
+index dbd15c48c3..5c88fa0cd6 100644
+--- a/components/provenance_gate/renderer/provenance_page_text_observer.cc
++++ b/components/provenance_gate/renderer/provenance_page_text_observer.cc
+@@ -1,13 +1,17 @@
+ // Copyright 2026 The yubi-OS Authors. BSD-3-Clause (matches Chromium).
+ #include "components/provenance_gate/renderer/provenance_page_text_observer.h"
+ 
++#include <string>
+ #include <utility>
++#include <vector>
+ 
+ #include "base/logging.h"
+ #include "content/public/renderer/render_frame.h"
+ #include "third_party/blink/public/platform/browser_interface_broker_proxy.h"
+ #include "third_party/blink/public/platform/web_string.h"
+ #include "third_party/blink/public/web/web_document.h"
++#include "third_party/blink/public/web/web_element.h"
++#include "third_party/blink/public/web/web_element_collection.h"
+ #include "third_party/blink/public/web/web_local_frame.h"
+ #include "url/gurl.h"
+ 
+@@ -59,6 +63,35 @@ void ProvenancePageTextObserver::DidFinishLoad() {
+         remote_.BindNewPipeAndPassReceiver());
+   }
+   remote_->ReportPageText(url.spec(), text);
++
++  // Series 0008: collect <img> source URLs for the browser-side C2PA
++  // manifest inspection. Count-capped at a transport guard; policy stays
++  // browser-side.
++  VLOG(1) << "provenance_gate: renderer img_walk starting";
++  blink::WebElementCollection collection = document.All();
++  collection.Reset();
++  std::vector<std::string> image_urls;
++  constexpr size_t kMaxImageUrls = 64;
++  for (blink::WebElement element = collection.NextItem();
++       !element.IsNull() && image_urls.size() < kMaxImageUrls;
++       element = collection.NextItem()) {
++    if (!element.HasHTMLTagName("img")) {
++      continue;
++    }
++    blink::WebString src = element.GetAttribute("src");
++    if (src.IsNull() || src.IsEmpty()) {
++      continue;
++    }
++    const GURL image_url(document.CompleteURL(src).GetString().Utf8());
++    if (image_url.is_valid() && image_url.SchemeIsHTTPOrHTTPS()) {
++      image_urls.push_back(image_url.spec());
++    }
++  }
++  VLOG(1) << "provenance_gate: renderer img_walk found "
++          << image_urls.size() << " images";
++  if (!image_urls.empty()) {
++    remote_->ReportPageImages(url.spec(), image_urls);
++  }
+ }
+ 
+ void ProvenancePageTextObserver::OnDestruct() {
+diff --git a/content/shell/BUILD.gn b/content/shell/BUILD.gn
+index 2195da926e..9db0c7ecfa 100644
+--- a/content/shell/BUILD.gn
++++ b/content/shell/BUILD.gn
+@@ -189,7 +189,9 @@ static_library("content_shell_lib") {
+     "browser/shell_browser_main_parts.cc",
+     "browser/shell_browser_main_parts.h",
+     "browser/shell_content_browser_client.cc",
+-      "browser/provenance_gate_throttle.h",
++      "browser/provenance_gate_throttle.h","browser/provenance_page_inspector.cc",
++"browser/provenance_page_inspector.h",
++
+       "browser/provenance_gate_throttle.cc",
+     "browser/shell_content_browser_client.h",
+     "browser/shell_content_index_provider.cc",
+@@ -312,6 +314,8 @@ static_library("content_shell_lib") {
+ 
+   public_deps = [
+       "//components/provenance_gate",
++"//services/data_decoder/public/cpp",
++"//services/network/public/cpp",
+       "//components/provenance_gate/public/mojom",
+       "//components/provenance_gate:renderer",
+     ":android_shell_descriptors",
+diff --git a/content/shell/browser/provenance_gate_throttle.cc b/content/shell/browser/provenance_gate_throttle.cc
+index 12b16ca6c7..158cc3ba22 100644
+--- a/content/shell/browser/provenance_gate_throttle.cc
++++ b/content/shell/browser/provenance_gate_throttle.cc
+@@ -2,6 +2,7 @@
+ #include "content/shell/browser/provenance_gate_throttle.h"
+ 
+ #include "base/logging.h"
++#include "content/shell/browser/provenance_page_inspector.h"
+ #include "net/base/net_errors.h"
+ #include "url/gurl.h"
+ 
+@@ -19,12 +20,16 @@ void ProvenanceGateThrottle::WillProcessResponse(
+     const GURL& response_url,
+     network::mojom::URLResponseHead* response_head,
+     bool* defer) {
+-  // Series 0002: the gate wiring. Detector adapters (Series 0007) supply
+-  // Evidence; until they exist the engine sees no evidence: Mode A allows
+-  // everything, Mode B (provenance_required) fails closed.
+-  std::vector<provenance_gate::Evidence> evidence;
++  // Series 0002 wiring: evaluate the policy. Series 0008: detector results
++  // are recorded per-origin by the page-image scanner (C2PA manifest
++  // inspection of the page's <img> bytes); navigations to an origin with
++  // recorded evidence are evaluated against it. Mode A blocks on the
++  // recorded evidence (overridable); Mode B still fails closed regardless.
++  std::vector<provenance_gate::Evidence> evidence =
++      ProvenanceEvidenceStore::Get().GetEvidenceForOrigin(response_url);
+   const auto decision = provenance_gate::Evaluate(policy_, evidence);
+   VLOG(1) << "provenance_gate: url=" << response_url.spec()
++          << " evidence=" << evidence.size()
+           << " allow=" << decision.allow
+           << " reason=" << decision.reason;
+ 
+@@ -34,7 +39,7 @@ void ProvenanceGateThrottle::WillProcessResponse(
+   if (!decision.allow) {
+     *defer = true;
+     delegate_->CancelWithError(net::ERR_BLOCKED_BY_CLIENT,
+-                                decision.reason);
++                               decision.reason);
+   }
+ }
+ 
+diff --git a/content/shell/browser/provenance_page_inspector.cc b/content/shell/browser/provenance_page_inspector.cc
+new file mode 100644
+index 0000000000..946daafdf1
+--- /dev/null
++++ b/content/shell/browser/provenance_page_inspector.cc
+@@ -0,0 +1,136 @@
++// Copyright 2026 The yubi-OS Authors. BSD-3-Clause (matches Chromium).
++#include "content/shell/browser/provenance_page_inspector.h"
++
++#include <optional>
++#include <utility>
++
++#include "base/containers/span.h"
++#include "base/logging.h"
++#include "content/public/browser/browser_context.h"
++#include "content/public/browser/storage_partition.h"
++#include "mojo/public/cpp/base/big_buffer.h"
++#include "net/traffic_annotation/network_traffic_annotation.h"
++#include "services/network/public/cpp/resource_request.h"
++#include "services/network/public/cpp/simple_url_loader.h"
++#include "url/gurl.h"
++#include "url/origin.h"
++
++namespace content {
++
++namespace {
++// Resource sanity guards (not policy): how many <img> elements to inspect
++// per page and how many bytes to fetch per image.
++constexpr size_t kMaxImagesPerScan = 10;
++constexpr int kMaxImageBytes = 5 * 1024 * 1024;
++}  // namespace
++
++ProvenanceEvidenceStore& ProvenanceEvidenceStore::Get() {
++  static base::NoDestructor<ProvenanceEvidenceStore> instance;
++  return *instance;
++}
++
++void ProvenanceEvidenceStore::RecordEvidence(
++    const GURL& page_origin,
++    provenance_gate::Evidence evidence) {
++  const std::string key = url::Origin::Create(page_origin).Serialize();
++  base::AutoLock lock(lock_);
++  evidence_by_origin_[key].push_back(std::move(evidence));
++}
++
++std::vector<provenance_gate::Evidence>
++ProvenanceEvidenceStore::GetEvidenceForOrigin(const GURL& url) {
++  const std::string key = url::Origin::Create(url).Serialize();
++  base::AutoLock lock(lock_);
++  auto it = evidence_by_origin_.find(key);
++  if (it == evidence_by_origin_.end()) {
++    return {};
++  }
++  return it->second;
++}
++
++ProvenancePageImageScanner::ProvenancePageImageScanner(
++    BrowserContext* browser_context)
++    : browser_context_(browser_context),
++      decoder_(std::make_unique<data_decoder::DataDecoder>()) {}
++
++ProvenancePageImageScanner::~ProvenancePageImageScanner() = default;
++
++void ProvenancePageImageScanner::Scan(
++    const GURL& page_url,
++    const std::vector<std::string>& image_urls) {
++  if (!inspection_remote_.is_bound()) {
++    decoder_->GetService()->BindProvenanceInspection(
++        inspection_remote_.BindNewPipeAndPassReceiver());
++  }
++  const GURL page_origin = page_url.GetWithEmptyPath();
++  size_t fetched = 0;
++  for (const std::string& image_url_string : image_urls) {
++    if (fetched >= kMaxImagesPerScan) {
++      break;
++    }
++    const GURL image_url(image_url_string);
++    if (!image_url.is_valid() || !image_url.SchemeIsHTTPOrHTTPS()) {
++      continue;
++    }
++    ++fetched;
++    auto resource_request = std::make_unique<network::ResourceRequest>();
++    resource_request->url = image_url;
++    resource_request->method = "GET";
++    auto loader = network::SimpleURLLoader::Create(
++        std::move(resource_request),
++        net::DefineNetworkTrafficAnnotation(
++            "provenance_inspection",
++            "Fetches images for C2PA manifest inspection in the provenance gate."));
++    auto* loader_ptr = loader.get();
++    pending_loaders_.push_back(std::move(loader));
++    loader_ptr->DownloadToString(
++        browser_context_->GetDefaultStoragePartition()
++            ->GetURLLoaderFactoryForBrowserProcess()
++            .get(),
++        base::BindOnce(&ProvenancePageImageScanner::OnImageFetched,
++                       base::Unretained(this), page_origin, image_url),
++        kMaxImageBytes);
++    VLOG(1) << "provenance_gate: image_scan fetching url=" << image_url.spec();
++  }
++}
++
++void ProvenancePageImageScanner::OnImageFetched(
++    const GURL& page_origin,
++    const GURL& image_url,
++    std::optional<std::string> body) {
++  if (!body || body->empty()) {
++    VLOG(1) << "provenance_gate: image_scan fetch failed or empty url="
++            << image_url.spec();
++    return;
++  }
++  VLOG(1) << "provenance_gate: image_scan fetched url=" << image_url.spec()
++          << " bytes=" << body->size();
++  inspection_remote_->InspectImage(
++      mojo_base::BigBuffer(base::as_byte_span(*body)),
++      base::BindOnce(&ProvenancePageImageScanner::OnImageInspected,
++                     base::Unretained(this), page_origin, image_url));
++}
++
++void ProvenancePageImageScanner::OnImageInspected(
++    const GURL& page_origin,
++    const GURL& image_url,
++    data_decoder::mojom::ProvenanceImageInspectionPtr result) {
++  VLOG(1) << "provenance_gate: image_scan result url=" << image_url.spec()
++          << " has_manifest=" << result->has_manifest
++          << " ai_claimed=" << result->ai_claimed
++          << " actions=" << result->claimed_actions.size();
++  if (!result->has_manifest || !result->ai_claimed) {
++    return;
++  }
++  provenance_gate::Evidence evidence;
++  evidence.signal = provenance_gate::Signal::kC2paUnverifiedAiAction;
++  evidence.confidence = 1.0;
++  evidence.source = "c2pa";
++  ProvenanceEvidenceStore::Get().RecordEvidence(page_origin,
++                                                std::move(evidence));
++  VLOG(1) << "provenance_gate: evidence recorded origin="
++          << url::Origin::Create(page_origin).Serialize()
++          << " signal=c2pa_unverified_ai_action";
++}
++
++}  // namespace content
+diff --git a/content/shell/browser/provenance_page_inspector.h b/content/shell/browser/provenance_page_inspector.h
+new file mode 100644
+index 0000000000..8161da9b47
+--- /dev/null
++++ b/content/shell/browser/provenance_page_inspector.h
+@@ -0,0 +1,81 @@
++// Copyright 2026 The yubi-OS Authors. BSD-3-Clause (matches Chromium).
++#ifndef CONTENT_SHELL_BROWSER_PROVENANCE_PAGE_INSPECTOR_H_
++#define CONTENT_SHELL_BROWSER_PROVENANCE_PAGE_INSPECTOR_H_
++
++#include <map>
++#include <optional>
++#include <memory>
++#include <string>
++#include <vector>
++
++#include "base/memory/raw_ptr.h"
++#include "base/no_destructor.h"
++#include "base/synchronization/lock.h"
++#include "components/provenance_gate/policy.h"
++#include "mojo/public/cpp/bindings/remote.h"
++#include "services/data_decoder/public/cpp/data_decoder.h"
++#include "services/data_decoder/public/mojom/provenance_inspection.mojom.h"
++#include "services/network/public/cpp/simple_url_loader.h"
++#include "net/traffic_annotation/network_traffic_annotation.h"
++#include "content/public/browser/storage_partition.h"
++#include "url/gurl.h"
++
++namespace content {
++class BrowserContext;
++
++// Series 0008: browser-side store of detector Evidence, keyed by page
++// origin. Written by the page-image scanner (UI thread) as C2PA manifest
++// inspections complete; read by the provenance gate throttle (which runs
++// on a different sequence), hence the lock. In-memory only: evidence lives
++// for the browser process lifetime.
++class ProvenanceEvidenceStore {
++ public:
++  static ProvenanceEvidenceStore& Get();
++
++  void RecordEvidence(const GURL& page_origin,
++                      provenance_gate::Evidence evidence);
++  std::vector<provenance_gate::Evidence> GetEvidenceForOrigin(const GURL& url);
++
++ private:
++  friend class base::NoDestructor<ProvenanceEvidenceStore>;
++  ProvenanceEvidenceStore() = default;
++
++  base::Lock lock_;
++  std::map<std::string, std::vector<provenance_gate::Evidence>>
++      evidence_by_origin_;
++};
++
++// Series 0008: fetches a page's <img> URLs, runs each through the sandboxed
++// data_decoder C2PA manifest inspection (Series 0007), and records Evidence
++// for the page origin when the manifest claims AI generation
++// (kC2paUnverifiedAiAction). The manifest signature is NOT validated at this
++// stage — the signal is "a manifest claims X", not "X is trusted".
++class ProvenancePageImageScanner {
++ public:
++  explicit ProvenancePageImageScanner(BrowserContext* browser_context);
++  ~ProvenancePageImageScanner();
++
++  ProvenancePageImageScanner(const ProvenancePageImageScanner&) = delete;
++  ProvenancePageImageScanner& operator=(const ProvenancePageImageScanner&) =
++      delete;
++
++  void Scan(const GURL& page_url, const std::vector<std::string>& image_urls);
++
++ private:
++  void OnImageFetched(const GURL& page_origin,
++                      const GURL& image_url,
++                      std::optional<std::string> body);
++  void OnImageInspected(const GURL& page_origin,
++                        const GURL& image_url,
++                        data_decoder::mojom::ProvenanceImageInspectionPtr
++                            result);
++
++  raw_ptr<BrowserContext> browser_context_;
++  std::unique_ptr<data_decoder::DataDecoder> decoder_;
++  mojo::Remote<data_decoder::mojom::ProvenanceInspection> inspection_remote_;
++  std::vector<std::unique_ptr<network::SimpleURLLoader>> pending_loaders_;
++};
++
++}  // namespace content
++
++#endif  // CONTENT_SHELL_BROWSER_PROVENANCE_PAGE_INSPECTOR_H_
+diff --git a/content/shell/browser/shell_content_browser_client.cc b/content/shell/browser/shell_content_browser_client.cc
+index 77ccb8f6c7..1b8b751598 100644
+--- a/content/shell/browser/shell_content_browser_client.cc
++++ b/content/shell/browser/shell_content_browser_client.cc
+@@ -6,6 +6,8 @@
+ 
+ #include "content/shell/browser/provenance_gate_throttle.h"
+ #include "components/provenance_gate/public/mojom/provenance_gate.mojom.h"
++#include "base/memory/raw_ptr.h"
++#include "content/shell/browser/provenance_page_inspector.h"
+ #include "mojo/public/cpp/bindings/self_owned_receiver.h"
+ #include <map>
+ #include "url/gurl.h"
+@@ -231,12 +233,29 @@ class ProvenancePageTextStore {
+ class ProvenancePageTextImpl
+     : public provenance_gate::mojom::ProvenancePageText {
+  public:
+-  ProvenancePageTextImpl() = default;
++  explicit ProvenancePageTextImpl(BrowserContext* browser_context)
++      : browser_context_(browser_context) {}
+ 
+   void ReportPageText(const std::string& frame_url,
+                       const std::string& text) override {
+     ProvenancePageTextStore::Get().Record(GURL(frame_url), text);
+   }
++
++  void ReportPageImages(
++      const std::string& frame_url,
++      const std::vector<std::string>& image_urls) override {
++    // Series 0008: hand the page's <img> URLs to the image scanner; it
++    // fetches the bytes, runs the sandboxed C2PA manifest inspection
++    // (Series 0007), and records per-origin Evidence when the manifest
++    // claims AI generation.
++    image_scanner_ =
++        std::make_unique<ProvenancePageImageScanner>(browser_context_);
++    image_scanner_->Scan(GURL(frame_url), image_urls);
++  }
++
++ private:
++  raw_ptr<BrowserContext> browser_context_;
++  std::unique_ptr<ProvenancePageImageScanner> image_scanner_;
+ };
+ 
+ void BindProvenancePageText(
+@@ -245,7 +264,8 @@ void BindProvenancePageText(
+         receiver) {
+   DCHECK(render_frame_host);
+   mojo::MakeSelfOwnedReceiver(
+-      std::make_unique<ProvenancePageTextImpl>(), std::move(receiver));
++      std::make_unique<ProvenancePageTextImpl>(
++          render_frame_host->GetBrowserContext()), std::move(receiver));
+ }
+ 
+ void BindRustTestServiceReceiver(
+diff --git a/services/data_decoder/provenance_inspection_impl.cc b/services/data_decoder/provenance_inspection_impl.cc
+index 4460f159db..447a9f974b 100644
+--- a/services/data_decoder/provenance_inspection_impl.cc
++++ b/services/data_decoder/provenance_inspection_impl.cc
+@@ -14,6 +14,7 @@ void ProvenanceInspectionImpl::InspectImage(mojo_base::BigBuffer data,
+   const ProvenanceManifest manifest =
+       InspectProvenance(data.data(), data.size());
+   result->has_manifest = manifest.found;
++  result->ai_claimed = manifest.ai_claimed;
+   result->claimed_actions = manifest.claimed_actions;
+   result->detail = manifest.detail;
+   std::move(callback).Run(std::move(result));
+diff --git a/services/data_decoder/provenance_manifest_parser.cc b/services/data_decoder/provenance_manifest_parser.cc
+index 2edd0a326f..c70cb25d76 100644
+--- a/services/data_decoder/provenance_manifest_parser.cc
++++ b/services/data_decoder/provenance_manifest_parser.cc
+@@ -200,6 +200,13 @@ ProvenanceManifest InspectProvenance(const uint8_t* data, size_t size) {
+ 
+   m.found = !jsons.empty();
+   for (const std::string& j : jsons) {
++    // Series 0008: flag AI-generation claims. One substring check covers
++    // both the action form (c2pa.actions/trainedAlgorithmicMedia) and the
++    // digital_source_type form
++    // (http://c2pa.org/digitalsourcetype/trainedAlgorithmicMedia).
++    if (j.find("trainedAlgorithmicMedia") != std::string::npos) {
++      m.ai_claimed = true;
++    }
+     ExtractActions(j, &m.claimed_actions);
+   }
+   return m;
+diff --git a/services/data_decoder/provenance_manifest_parser.h b/services/data_decoder/provenance_manifest_parser.h
+index 6ef9087cc1..ddd3f267dd 100644
+--- a/services/data_decoder/provenance_manifest_parser.h
++++ b/services/data_decoder/provenance_manifest_parser.h
+@@ -21,6 +21,12 @@ namespace data_decoder {
+ // CLAIMS only. Callers must not treat it as trusted provenance.
+ struct ProvenanceManifest {
+   bool found = false;
++  // Series 0008: the manifest text mentions trainedAlgorithmicMedia — the
++  // C2PA digital source type for AI-generated content. Covers both the
++  // action form (c2pa.actions/trainedAlgorithmicMedia) and the
++  // digital_source_type form
++  // (http://c2pa.org/digitalsourcetype/trainedAlgorithmicMedia).
++  bool ai_claimed = false;
+   std::vector<std::string> claimed_actions;  // c2pa.actions/... URIs
+   std::string detail;                        // parser notes
+ };
+diff --git a/services/data_decoder/provenance_manifest_parser_unittest.cc b/services/data_decoder/provenance_manifest_parser_unittest.cc
+index 5f9321813a..dfa990f99d 100644
+--- a/services/data_decoder/provenance_manifest_parser_unittest.cc
++++ b/services/data_decoder/provenance_manifest_parser_unittest.cc
+@@ -143,6 +143,24 @@ TEST(ProvenanceManifestParser, TruncatedJpeg_Safe) {
+   EXPECT_FALSE(m.found);
+ }
+ 
++TEST(ProvenanceManifestParser, DigitalSourceType_TriggersAiClaimed) {
++  // Series 0008: the digital_source_type form of the AI signal (used by
++  // real-world generators) must set ai_claimed even with no c2pa.actions.
++  std::string json =
++    "{\"ingredients\":[{\"digital_source_type\":\"http://c2pa.org/digitalsourcetype/trainedAlgorithmicMedia\"}]}";
++  auto jpeg = JpegWithApp11(JumbfWithJson(json));
++  ProvenanceManifest m = InspectProvenance(jpeg.data(), jpeg.size());
++  EXPECT_TRUE(m.found);
++  EXPECT_TRUE(m.ai_claimed);
++}
++
++TEST(ProvenanceManifestParser, NoAiMention_NoAiClaimed) {
++  auto jpeg = JpegWithApp11(JumbfWithJson("{\"title\":\"clean\"}"));
++  ProvenanceManifest m = InspectProvenance(jpeg.data(), jpeg.size());
++  EXPECT_TRUE(m.found);
++  EXPECT_FALSE(m.ai_claimed);
++}
++
+ TEST(ProvenanceManifestParser, Garbage_Safe) {
+   std::vector<uint8_t> junk(4096, 0xAB);
+   ProvenanceManifest m = InspectProvenance(junk.data(), junk.size());
+diff --git a/services/data_decoder/public/mojom/provenance_inspection.mojom b/services/data_decoder/public/mojom/provenance_inspection.mojom
+index 62ce310450..5398c03e97 100644
+--- a/services/data_decoder/public/mojom/provenance_inspection.mojom
++++ b/services/data_decoder/public/mojom/provenance_inspection.mojom
+@@ -13,6 +13,8 @@ import "mojo/public/mojom/base/big_buffer.mojom";
+ struct ProvenanceImageInspection {
+   // A C2PA JUMBF manifest was found.
+   bool has_manifest;
++  // Series 0008: the manifest claims AI generation (trainedAlgorithmicMedia).
++  bool ai_claimed;
+   // Action URIs the manifest claims (e.g. c2pa.actions/trainedAlgorithmicMedia).
+   array<string> claimed_actions;
+   // Parser notes (container type, bytes scanned, errors).
+-- 
+2.53.0
+
