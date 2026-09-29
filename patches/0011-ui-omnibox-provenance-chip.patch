@@ -1,0 +1,365 @@
+From c10134d5a4000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: OMNI-AGENT <foil-copy-overrate@duck.com>
+Subject: [PATCH] ui: omnibox provenance chip (series 0011)
+
+---
+diff --git a/chrome/browser/ui/views/location_bar/BUILD.gn b/chrome/browser/ui/views/location_bar/BUILD.gn
+index d15829cb54..85b03751fe 100644
+--- a/chrome/browser/ui/views/location_bar/BUILD.gn
++++ b/chrome/browser/ui/views/location_bar/BUILD.gn
+@@ -24,6 +24,7 @@ source_set("location_bar") {
+       "omnibox_chip_button.h",
+       "omnibox_chip_theme.h",
+       "omnibox_popup_file_selector.h",
++      "provenance_chip_view.h",
+       "record_replay_page_action_controller.h",
+       "selected_keyword_view.h",
+       "webui_content_setting_image_control.h",
+@@ -51,6 +52,7 @@ source_set("location_bar") {
+       "//components/browser_apis/ui_controllers/toolbar:mojom_data_model",
+       "//components/browser_apis/ui_controllers/toolbar:types",
+       "//components/omnibox/browser:location_bar",
++      "//components/provenance_gate:browser",
+       "//components/page_info/core",
+       "//components/record_replay/core/browser",
+       "//components/sessions:session_id",
+@@ -92,6 +94,8 @@ source_set("impl") {
+       "location_bar_view.cc",
+       "location_icon_state_helper.cc",
+       "location_icon_view.cc",
++      "provenance_chip_view.cc",
++      "provenance_chip_view.h",
+       "omnibox_chip_button.cc",
+       "omnibox_popup_file_selector.cc",
+       "record_replay_page_action_controller.cc",
+diff --git a/chrome/browser/ui/views/location_bar/location_bar_view.cc b/chrome/browser/ui/views/location_bar/location_bar_view.cc
+index 335b2902fd..8ecb12ef3c 100644
+--- a/chrome/browser/ui/views/location_bar/location_bar_view.cc
++++ b/chrome/browser/ui/views/location_bar/location_bar_view.cc
+@@ -475,6 +475,11 @@ void LocationBarView::Init() {
+   ai_mode_hint_label->SetVisible(false);
+   ai_mode_hint_label_ = AddChildView(std::move(ai_mode_hint_label));
+ 
++  // Series 0006: omnibox provenance chip (mirrors the AI Mode hint label:
++  // hidden by default, shown only when the gate has evidence for this
++  // page's origin).
++  provenance_chip_view_ = AddChildView(std::make_unique<ProvenanceChipView>());
++
+   // Initialize the location entry. We do this to avoid a black flash which is
+   // visible when the location entry has just been initialized.
+   Update(nullptr);
+@@ -858,6 +863,8 @@ void LocationBarView::Layout(PassKey) {
+                               : trailing_decorations_edge_padding);
+   add_trailing_decoration(ai_mode_hint_label_, /*intra_item_padding=*/0,
+                           /*edge_padding=*/trailing_decorations_edge_padding);
++  add_trailing_decoration(provenance_chip_view_, /*intra_item_padding=*/0,
++                          /*edge_padding=*/trailing_decorations_edge_padding);
+   for (ContentSettingImageView* view :
+        std::views::reverse(content_setting_views_)) {
+     int intra_item_padding = kContentSettingIntraItemPadding;
+@@ -996,6 +1003,9 @@ bool LocationBarView::HasSecurityStateChanged() {
+ void LocationBarView::Update(WebContents* contents) {
+   TRACE_EVENT("omnibox", "LocationBarView::Update");
+ 
++  // Series 0006: refresh the provenance chip for this navigation.
++  provenance_chip_view_->Update(contents);
++
+   RefreshContentSettingViews();
+   RefreshPageActionIconViews();
+   location_icon_view_->Update(
+diff --git a/chrome/browser/ui/views/location_bar/location_bar_view.h b/chrome/browser/ui/views/location_bar/location_bar_view.h
+index e5a30ce42a..ec0a5e6e9f 100644
+--- a/chrome/browser/ui/views/location_bar/location_bar_view.h
++++ b/chrome/browser/ui/views/location_bar/location_bar_view.h
+@@ -23,6 +23,7 @@
+ #include "chrome/browser/ui/page_action/page_action_icon_type.h"
+ #include "chrome/browser/ui/views/location_bar/content_setting_image_view.h"
+ #include "chrome/browser/ui/views/location_bar/location_icon_view.h"
++#include "chrome/browser/ui/views/location_bar/provenance_chip_view.h"
+ #include "chrome/browser/ui/views/omnibox/omnibox_popup_presenter_delegate.h"
+ #include "chrome/browser/ui/views/permissions/chip/chip_controller.h"
+ #include "chrome/browser/ui/views/permissions/chip/permission_dashboard_controller.h"
+@@ -589,6 +590,10 @@ class LocationBarView
+   // A label to show the AI Mode hint text.
+   raw_ptr<views::Label> ai_mode_hint_label_ = nullptr;
+ 
++  // Series 0006: omnibox chip showing the provenance state of the current
++  // page's origin (AI content claimed by a C2PA manifest).
++  raw_ptr<ProvenanceChipView> provenance_chip_view_ = nullptr;
++
+   // Animation to change whole location bar background color on hover.
+   gfx::SlideAnimation hover_animation_{this};
+ 
+diff --git a/chrome/browser/ui/views/location_bar/provenance_chip_view.cc b/chrome/browser/ui/views/location_bar/provenance_chip_view.cc
+new file mode 100644
+index 0000000000..8b38ec3d51
+--- /dev/null
++++ b/chrome/browser/ui/views/location_bar/provenance_chip_view.cc
+@@ -0,0 +1,124 @@
++// Copyright 2026 The yubi-OS Authors. BSD-3-Clause (matches Chromium).
++#include "chrome/browser/ui/views/location_bar/provenance_chip_view.h"
++
++#include "base/logging.h"
++#include "base/task/sequenced_task_runner.h"
++#include "base/time/time.h"
++#include "chrome/browser/ui/views/chrome_typography.h"
++#include "chrome/browser/ui/views/location_bar/location_bar_view.h"
++#include "components/provenance_gate/browser/provenance_evidence_store.h"
++#include "content/public/browser/web_contents.h"
++#include "ui/base/metadata/metadata_impl_macros.h"
++#include "ui/views/style/typography.h"
++#include "url/origin.h"
++
++namespace {
++
++// Bounded re-check window: the page-image scanner records evidence shortly
++// after the page commits (image fetch + sandboxed C2PA inspection), but the
++// first LocationBarView::Update runs before that. Poll a few times per
++// navigation so the chip appears as soon as evidence lands; bounded as a
++// transport guard, not policy.
++constexpr int kMaxEvidencePolls = 20;
++constexpr base::TimeDelta kPollInterval = base::Milliseconds(500);
++
++}  // namespace
++
++// Series 0006: relays evidence-store notifications to the chip through a
++// WeakPtr so a pending notification can never touch a destroyed chip.
++class ProvenanceChipView::EvidenceObserver
++    : public provenance_gate::ProvenanceEvidenceStore::Observer {
++ public:
++  explicit EvidenceObserver(base::WeakPtr<ProvenanceChipView> chip)
++      : chip_(std::move(chip)) {}
++  ~EvidenceObserver() override = default;
++
++  void OnEvidenceRecorded(const GURL& page_origin) override {
++    if (chip_) {
++      chip_->OnEvidenceRecorded(page_origin);
++    }
++  }
++
++ private:
++  base::WeakPtr<ProvenanceChipView> chip_;
++};
++
++ProvenanceChipView::ProvenanceChipView()
++    : views::Label(std::u16string(),
++                   CONTEXT_OMNIBOX_PRIMARY,
++                   views::style::STYLE_PRIMARY) {
++  SetVisible(false);
++  evidence_observer_ =
++      std::make_unique<EvidenceObserver>(weak_factory_.GetWeakPtr());
++  provenance_gate::ProvenanceEvidenceStore::Get().AddObserver(
++      evidence_observer_.get());
++}
++
++ProvenanceChipView::~ProvenanceChipView() {
++  provenance_gate::ProvenanceEvidenceStore::Get().RemoveObserver(
++      evidence_observer_.get());
++}
++
++void ProvenanceChipView::Update(content::WebContents* contents) {
++  if (!contents) {
++    url_ = GURL();
++    polls_left_ = 0;
++    SetVisible(false);
++    return;
++  }
++  // Every non-null update re-arms the bounded poll. RefreshEvidence pulls
++  // the live committed URL from the parent LocationBarView, so mid-
++  // navigation updates (transiently empty committed URL) and tab switches
++  // are handled by the poll rather than by clobbering url_ here.
++  polls_left_ = kMaxEvidencePolls;
++  RefreshEvidence();
++}
++
++void ProvenanceChipView::OnEvidenceRecorded(const GURL& page_origin) {
++  if (url_.is_valid() &&
++      url::Origin::Create(url_) == url::Origin::Create(page_origin)) {
++    RefreshEvidence();
++  }
++}
++
++void ProvenanceChipView::RefreshEvidence() {
++  // The poll doubles as the URL tracker: pull the live tab's committed URL
++  // from the parent LocationBarView so the chip tracks the visible page
++  // even when LocationBarView::Update does not fire post-commit.
++  if (auto* location_bar = static_cast<LocationBarView*>(parent())) {
++    if (content::WebContents* contents = location_bar->GetWebContents()) {
++      const GURL url = contents->GetLastCommittedURL();
++      if (!url.is_empty() && url_ != url) {
++        url_ = url;
++        polls_left_ = kMaxEvidencePolls;
++      }
++    }
++  }
++  bool ai_detected = false;
++  if (url_.is_valid()) {
++    ai_detected = !provenance_gate::ProvenanceEvidenceStore::Get()
++                       .GetEvidenceForOrigin(url_)
++                       .empty();
++  }
++  SetVisible(ai_detected);
++  if (ai_detected) {
++    SetText(u"AI CONTENT");
++    SetTooltipText(
++        u"A C2PA manifest on this page claims AI-generated content "
++        u"(unverified)");
++    SetEnabledColor(SkColorSetRGB(0xD9, 0x30, 0x25));
++  }
++  VLOG(1) << "provenance_gate: chip url=" << url_.spec()
++          << " ai=" << ai_detected << " polls_left=" << polls_left_;
++  if (!ai_detected && polls_left_ > 0) {
++    --polls_left_;
++    base::SequencedTaskRunner::GetCurrentDefault()->PostDelayedTask(
++        FROM_HERE,
++        base::BindOnce(&ProvenanceChipView::RefreshEvidence,
++                       weak_factory_.GetWeakPtr()),
++        kPollInterval);
++  }
++}
++
++BEGIN_METADATA(ProvenanceChipView)
++END_METADATA
+diff --git a/chrome/browser/ui/views/location_bar/provenance_chip_view.h b/chrome/browser/ui/views/location_bar/provenance_chip_view.h
+new file mode 100644
+index 0000000000..2fd05415c0
+--- /dev/null
++++ b/chrome/browser/ui/views/location_bar/provenance_chip_view.h
+@@ -0,0 +1,59 @@
++// Copyright 2026 The yubi-OS Authors. BSD-3-Clause (matches Chromium).
++#ifndef CHROME_BROWSER_UI_VIEWS_LOCATION_BAR_PROVENANCE_CHIP_VIEW_H_
++#define CHROME_BROWSER_UI_VIEWS_LOCATION_BAR_PROVENANCE_CHIP_VIEW_H_
++
++#include <memory>
++
++#include "base/memory/weak_ptr.h"
++#include "third_party/skia/include/core/SkColor.h"
++#include "ui/base/metadata/metadata_header_macros.h"
++#include "ui/views/controls/label.h"
++#include "url/gurl.h"
++
++namespace content {
++class WebContents;
++}
++
++namespace provenance_gate {
++class ProvenanceEvidenceStore;
++}
++
++// Series 0006: omnibox chip showing the provenance state of the current
++// page's origin. v1 shows the chip only when recorded evidence exists for
++// the origin (e.g. a C2PA manifest claiming AI generation). The chip
++// reports what a manifest CLAIMS, not a verified fact (CONSTRAINTS.md
++// forbids "human-verified" claims); manifest signature validation lands
++// with the c2pa-rs vendoring follow-up.
++//
++// Refresh sources: LocationBarView::Update on navigation / tab switch, a
++// short bounded poll after each navigation (the browser-side image scanner
++// records evidence shortly after commit), and the evidence store's
++// observer notification the moment evidence lands (Series 0006).
++class ProvenanceChipView : public views::Label {
++ METADATA_HEADER(ProvenanceChipView, views::Label)
++
++ public:
++  ProvenanceChipView();
++  ~ProvenanceChipView() override;
++
++  ProvenanceChipView(const ProvenanceChipView&) = delete;
++  ProvenanceChipView& operator=(const ProvenanceChipView&) = delete;
++
++  // Called on navigation / tab switch by LocationBarView::Update.
++  void Update(content::WebContents* contents);
++
++ private:
++  // Subscribes to the evidence store so the chip refreshes the moment
++  // evidence for this page's origin is recorded.
++  class EvidenceObserver;
++
++  void RefreshEvidence();
++  void OnEvidenceRecorded(const GURL& page_origin);
++
++  GURL url_;
++  int polls_left_ = 0;
++  std::unique_ptr<EvidenceObserver> evidence_observer_;
++  base::WeakPtrFactory<ProvenanceChipView> weak_factory_{this};
++};
++
++#endif  // CHROME_BROWSER_UI_VIEWS_LOCATION_BAR_PROVENANCE_CHIP_VIEW_H_
+diff --git a/components/provenance_gate/browser/provenance_evidence_store.cc b/components/provenance_gate/browser/provenance_evidence_store.cc
+index 35f8e13d70..bcd5d1d723 100644
+--- a/components/provenance_gate/browser/provenance_evidence_store.cc
++++ b/components/provenance_gate/browser/provenance_evidence_store.cc
+@@ -10,12 +10,28 @@ ProvenanceEvidenceStore& ProvenanceEvidenceStore::Get() {
+   return *instance;
+ }
+ 
++void ProvenanceEvidenceStore::AddObserver(Observer* observer) {
++  observers_.AddObserver(observer);
++}
++
++void ProvenanceEvidenceStore::RemoveObserver(const Observer* observer) {
++  observers_.RemoveObserver(observer);
++}
++
+ void ProvenanceEvidenceStore::RecordEvidence(
+     const GURL& page_origin,
+     Evidence evidence) {
+   const std::string key = url::Origin::Create(page_origin).Serialize();
+-  base::AutoLock lock(lock_);
+-  evidence_by_origin_[key].push_back(std::move(evidence));
++  {
++    base::AutoLock lock(lock_);
++    evidence_by_origin_[key].push_back(std::move(evidence));
++  }
++  // Series 0006: notify on the recording (UI) thread. The image scanner
++  // records evidence from the UI thread, so observers run on the UI thread
++  // too and no re-posting is needed.
++  for (Observer& observer : observers_) {
++    observer.OnEvidenceRecorded(page_origin);
++  }
+ }
+ 
+ std::vector<Evidence> ProvenanceEvidenceStore::GetEvidenceForOrigin(
+diff --git a/components/provenance_gate/browser/provenance_evidence_store.h b/components/provenance_gate/browser/provenance_evidence_store.h
+index 3a57d96cba..c80fb924b4 100644
+--- a/components/provenance_gate/browser/provenance_evidence_store.h
++++ b/components/provenance_gate/browser/provenance_evidence_store.h
+@@ -7,6 +7,8 @@
+ #include <vector>
+ 
+ #include "base/no_destructor.h"
++#include "base/observer_list.h"
++#include "base/observer_list_types.h"
+ #include "base/synchronization/lock.h"
+ #include "components/provenance_gate/policy.h"
+ #include "url/gurl.h"
+@@ -20,10 +22,21 @@ namespace provenance_gate {
+ // for the browser process lifetime.
+ // Series 0010: moved from content/shell to components so the full chrome
+ // browser and content_shell share one implementation.
++// Series 0006: Observers are notified on the recording (UI) thread when
++// evidence lands, so UI surfaces (the omnibox chip) can refresh without
++// polling or depending on LocationBarView::Update cadence.
+ class ProvenanceEvidenceStore {
+  public:
++  class Observer : public base::CheckedObserver {
++   public:
++    virtual void OnEvidenceRecorded(const GURL& page_origin) = 0;
++  };
++
+   static ProvenanceEvidenceStore& Get();
+ 
++  void AddObserver(Observer* observer);
++  void RemoveObserver(const Observer* observer);
++
+   void RecordEvidence(const GURL& page_origin, Evidence evidence);
+   std::vector<Evidence> GetEvidenceForOrigin(const GURL& url);
+ 
+@@ -33,6 +46,7 @@ class ProvenanceEvidenceStore {
+ 
+   base::Lock lock_;
+   std::map<std::string, std::vector<Evidence>> evidence_by_origin_;
++  base::ObserverList<Observer> observers_;
+ };
+ 
+ }  // namespace provenance_gate
