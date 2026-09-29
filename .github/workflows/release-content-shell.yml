@@ -83,7 +83,7 @@ jobs:
             echo ""
             echo '```'
             echo "tar --zstd -xf bundle.tar.zst"
-            echo "cd release-bundle && LD_LIBRARY_PATH=$PWD/lib ./content_shell --ozone-platform=headless --provenance-mode=block_on_detect <url>"
+            echo "cd release-bundle && LD_LIBRARY_PATH=\$PWD/lib ./content_shell --ozone-platform=headless --provenance-mode=block_on_detect <url>"
             echo '```'
             echo ""
             echo "System libs (asound, atk, cairo, ...) are not bundled — the distro provides them."
