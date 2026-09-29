@@ -1,0 +1,390 @@
+From da606fdc57000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: OMNI-AGENT <foil-copy-overrate@duck.com>
+Subject: [PATCH] ui: provenance interstitial replaces the blocked-load error page (series 0012)
+
+---
+diff --git a/chrome/browser/BUILD.gn b/chrome/browser/BUILD.gn
+index d520f38991..0610a8d8fc 100644
+--- a/chrome/browser/BUILD.gn
++++ b/chrome/browser/BUILD.gn
+@@ -926,6 +926,7 @@ source_set("core") {
+     ":universal_web_contents_observers",
+     "//base/allocator:buildflags",
+     "//build/config/linux/dbus:buildflags",
++    "//chrome/browser/provenance",
+     "//chrome/browser/accessibility",
+     "//chrome/browser/actor",
+     "//chrome/browser/actor:impl",
+diff --git a/chrome/browser/chrome_content_browser_client.cc b/chrome/browser/chrome_content_browser_client.cc
+index b7998d8477..6067ab15df 100644
+--- a/chrome/browser/chrome_content_browser_client.cc
++++ b/chrome/browser/chrome_content_browser_client.cc
+@@ -231,6 +231,7 @@
+ #include "chrome/installer/util/google_update_settings.h"
+ #include "components/autofill/core/common/autofill_features.h"
+ #include "components/autofill/core/common/autofill_switches.h"
++#include "chrome/browser/provenance/provenance_navigation_throttle.h"
+ #include "components/provenance_gate/browser/provenance_gate_throttle.h"
+ #include "components/blocked_content/popup_blocker.h"
+ #include "components/captive_portal/core/buildflags.h"
+@@ -5571,6 +5572,9 @@ void ChromeContentBrowserClient::RemovePresentationObserver(
+ 
+ void ChromeContentBrowserClient::CreateThrottlesForNavigation(
+     content::NavigationThrottleRegistry& registry) {
++  // Series 0012: provenance interstitial on gate-blocked navigations.
++  registry.AddThrottle(
++      std::make_unique<provenance::ProvenanceNavigationThrottle>(registry));
+   CreateAndAddChromeThrottlesForNavigation(registry);
+ }
+ 
+diff --git a/chrome/browser/provenance/BUILD.gn b/chrome/browser/provenance/BUILD.gn
+new file mode 100644
+index 0000000000..6b48a5a8c2
+--- /dev/null
++++ b/chrome/browser/provenance/BUILD.gn
+@@ -0,0 +1,14 @@
++# Copyright 2026 The yubi-OS Authors. BSD-3-Clause.
++source_set("provenance") {
++  sources = [
++    "provenance_navigation_throttle.cc",
++    "provenance_navigation_throttle.h",
++  ]
++  deps = [
++    "//base",
++    "//components/provenance_gate:browser",
++    "//content/public/browser",
++    "//net",
++    "//url",
++  ]
++}
+diff --git a/chrome/browser/provenance/provenance_navigation_throttle.cc b/chrome/browser/provenance/provenance_navigation_throttle.cc
+new file mode 100644
+index 0000000000..71a2d4a376
+--- /dev/null
++++ b/chrome/browser/provenance/provenance_navigation_throttle.cc
+@@ -0,0 +1,144 @@
++// Copyright 2026 The yubi-OS Authors. BSD-3-Clause (matches Chromium).
++#include "chrome/browser/provenance/provenance_navigation_throttle.h"
++
++#include <optional>
++#include <string>
++#include <utility>
++#include <vector>
++
++#include "base/command_line.h"
++#include "base/logging.h"
++#include "base/strings/stringprintf.h"
++#include "components/provenance_gate/browser/provenance_bypass_store.h"
++#include "components/provenance_gate/browser/provenance_evidence_store.h"
++#include "content/public/browser/navigation_handle.h"
++#include "net/base/net_errors.h"
++#include "url/gurl.h"
++#include "url/origin.h"
++
++namespace provenance {
++
++namespace {
++
++// Marker query param appended by the Proceed button; the gate throttle
++// adopts it into the ProvenanceBypassStore and allows the load.
++constexpr const char kBypassMarker[] = "__provenance_bypass=1";
++
++bool ProvenanceRequiredMode() {
++  return base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
++             "provenance-mode") == "provenance-required";
++}
++
++std::string EscapeHTML(const std::string& in) {
++  std::string out;
++  out.reserve(in.size());
++  for (const char c : in) {
++    switch (c) {
++      case '<':
++        out += "&lt;";
++        break;
++      case '>':
++        out += "&gt;";
++        break;
++      case '&':
++        out += "&amp;";
++        break;
++      case '"':
++        out += "&quot;";
++        break;
++      case '\'':
++        out += "&#39;";
++        break;
++      default:
++        out.push_back(c);
++    }
++  }
++  return out;
++}
++
++// The Proceed button carries the bypass command in the URL itself: the gate
++// throttle adopts the marker into the ProvenanceBypassStore and allows the
++// load. No error-page JS command channel needed for v1.
++std::string BuildProvenanceInterstitialHtml(
++    const GURL& url,
++    const provenance_gate::Evidence& evidence,
++    bool overridable) {
++  const std::string escaped_origin =
++      EscapeHTML(url::Origin::Create(url).Serialize());
++  std::string proceed_target = url.spec();
++  proceed_target += url.has_query() ? "&" : "?";
++  proceed_target += kBypassMarker;
++
++  std::string buttons;
++  if (overridable) {
++    buttons = base::StringPrintf(
++        "<p style=\"margin-top:24px;\">"
++        "<a href=\"%s\" style=\"background:#c52219;color:#fff;"
++        "padding:10px 20px;border-radius:6px;text-decoration:none;"
++        "font-weight:600;\">Proceed anyway</a> "
++        "<span style=\"color:#8b93b8;font-size:12px;\">"
++        "(adds this origin to the session bypass list)</span></p>",
++        EscapeHTML(proceed_target).c_str());
++  }
++
++  return base::StringPrintf(
++      "<!DOCTYPE html><html><head><meta charset=\"utf-8\">"
++      "<title>Provenance gate</title></head>"
++      "<body style=\"margin:0;font-family:sans-serif;"
++      "background:#0B1026;color:#e8e8ef;\">"
++      "<div style=\"max-width:620px;margin:10vh auto;padding:0 24px;\">"
++      "<div style=\"background:#3a0d0d;border:1px solid #c52219;"
++      "border-radius:10px;padding:18px 24px;\">"
++      "<div style=\"color:#ff6b5e;font-weight:700;font-size:22px;\">"
++      "AI content detected</div></div>"
++      "<div style=\"background:#141a33;border-radius:10px;"
++      "padding:22px 24px;margin-top:14px;\">"
++      "<p style=\"line-height:1.5;\">A C2PA manifest on "
++      "<code style=\"color:#9fd0ff;\">%s</code> claims this content was "
++      "AI-generated. The claim is <b>unverified</b> (manifest signatures are "
++      "not validated yet).</p>"
++      "<p style=\"color:#8b93b8;font-size:13px;\">"
++      "signal: c2pa_unverified_ai_action &middot; source: %s &middot; "
++      "confidence: %.2f</p>"
++      "%s"
++      "</div></div></body></html>",
++      escaped_origin.c_str(), EscapeHTML(evidence.source).c_str(),
++      evidence.confidence, buttons.c_str());
++}
++
++}  // namespace
++
++ProvenanceNavigationThrottle::ProvenanceNavigationThrottle(
++    content::NavigationThrottleRegistry& registry)
++    : content::NavigationThrottle(registry) {}
++
++ProvenanceNavigationThrottle::~ProvenanceNavigationThrottle() = default;
++
++content::NavigationThrottle::ThrottleCheckResult
++ProvenanceNavigationThrottle::WillFailRequest() {
++  content::NavigationHandle* handle = navigation_handle();
++  if (handle->GetNetErrorCode() != net::ERR_BLOCKED_BY_CLIENT ||
++      !handle->IsInPrimaryMainFrame()) {
++    return content::NavigationThrottle::PROCEED;
++  }
++  const GURL url = handle->GetURL();
++  const std::vector<provenance_gate::Evidence> evidence =
++      provenance_gate::ProvenanceEvidenceStore::Get().GetEvidenceForOrigin(url);
++  if (evidence.empty()) {
++    return content::NavigationThrottle::PROCEED;
++  }
++  const bool overridable = !ProvenanceRequiredMode();
++  VLOG(1) << "provenance_gate: interstitial url=" << url.spec()
++          << " overridable=" << overridable;
++  std::optional<std::string> html =
++      BuildProvenanceInterstitialHtml(url, evidence.front(), overridable);
++  return content::NavigationThrottle::ThrottleCheckResult(
++      content::NavigationThrottle::CANCEL, net::ERR_BLOCKED_BY_CLIENT,
++      std::move(html));
++}
++
++const char* ProvenanceNavigationThrottle::GetNameForLogging() {
++  return "ProvenanceNavigationThrottle";
++}
++
++}  // namespace provenance
+diff --git a/chrome/browser/provenance/provenance_navigation_throttle.h b/chrome/browser/provenance/provenance_navigation_throttle.h
+new file mode 100644
+index 0000000000..ab3dbfab89
+--- /dev/null
++++ b/chrome/browser/provenance/provenance_navigation_throttle.h
+@@ -0,0 +1,34 @@
++// Copyright 2026 The yubi-OS Authors. BSD-3-Clause (matches Chromium).
++#ifndef CHROME_BROWSER_PROVENANCE_PROVENANCE_NAVIGATION_THROTTLE_H_
++#define CHROME_BROWSER_PROVENANCE_PROVENANCE_NAVIGATION_THROTTLE_H_
++
++#include "content/public/browser/navigation_throttle.h"
++
++namespace provenance {
++
++// Series 0012: replaces the bare ERR_BLOCKED_BY_CLIENT error page with a
++// provenance interstitial when the gate blocks a main-frame navigation and
++// the evidence store has recorded AI-content evidence for the origin. The
++// interstitial shows the signal, its source and confidence, and (in
++// block_on_detect mode, where the policy marks the block overridable) a
++// Proceed button that navigates to the URL with a bypass marker; the gate
++// throttle adopts the marker into the ProvenanceBypassStore and allows.
++// provenance_required mode fails closed: no proceed.
++class ProvenanceNavigationThrottle : public content::NavigationThrottle {
++ public:
++  explicit ProvenanceNavigationThrottle(
++      content::NavigationThrottleRegistry& registry);
++  ~ProvenanceNavigationThrottle() override;
++
++  ProvenanceNavigationThrottle(const ProvenanceNavigationThrottle&) = delete;
++  ProvenanceNavigationThrottle& operator=(const ProvenanceNavigationThrottle&) =
++      delete;
++
++  // content::NavigationThrottle:
++  ThrottleCheckResult WillFailRequest() override;
++  const char* GetNameForLogging() override;
++};
++
++}  // namespace provenance
++
++#endif  // CHROME_BROWSER_PROVENANCE_PROVENANCE_NAVIGATION_THROTTLE_H_
+diff --git a/components/provenance_gate/BUILD.gn b/components/provenance_gate/BUILD.gn
+index abebd6b20c..308dcd6784 100644
+--- a/components/provenance_gate/BUILD.gn
++++ b/components/provenance_gate/BUILD.gn
+@@ -29,6 +29,8 @@ source_set("unit_tests") {
+ 
+ source_set("browser") {
+   sources = [
++    "browser/provenance_bypass_store.cc",
++    "browser/provenance_bypass_store.h",
+     "browser/provenance_evidence_store.cc",
+     "browser/provenance_evidence_store.h",
+     "browser/provenance_gate_throttle.cc",
+diff --git a/components/provenance_gate/browser/provenance_bypass_store.cc b/components/provenance_gate/browser/provenance_bypass_store.cc
+new file mode 100644
+index 0000000000..2ac001a99d
+--- /dev/null
++++ b/components/provenance_gate/browser/provenance_bypass_store.cc
+@@ -0,0 +1,43 @@
++// Copyright 2026 The yubi-OS Authors. BSD-3-Clause (matches Chromium).
++#include "components/provenance_gate/browser/provenance_bypass_store.h"
++
++#include "url/origin.h"
++
++namespace provenance_gate {
++
++namespace {
++// Marker query param the interstitial's Proceed button appends to the
++// blocked URL. Seeing it both signals "user chose to proceed" and carries
++// the command without needing an error-page JS command channel (v1).
++constexpr const char kBypassMarker[] = "__provenance_bypass=1";
++}  // namespace
++
++ProvenanceBypassStore& ProvenanceBypassStore::Get() {
++  static base::NoDestructor<ProvenanceBypassStore> instance;
++  return *instance;
++}
++
++bool ProvenanceBypassStore::MaybeAdoptBypassRequest(const GURL& url) {
++  if (!url.is_valid() ||
++      url.query().find(kBypassMarker) == std::string::npos) {
++    return false;
++  }
++  GURL::Replacements replacements;
++  replacements.ClearQuery();
++  const std::string origin_key =
++      url::Origin::Create(url.ReplaceComponents(replacements)).Serialize();
++  base::AutoLock lock(lock_);
++  bypassed_origins_.insert(origin_key);
++  return true;
++}
++
++bool ProvenanceBypassStore::IsBypassed(const GURL& url) {
++  if (!url.is_valid()) {
++    return false;
++  }
++  const std::string origin_key = url::Origin::Create(url).Serialize();
++  base::AutoLock lock(lock_);
++  return bypassed_origins_.contains(origin_key);
++}
++
++}  // namespace provenance_gate
+diff --git a/components/provenance_gate/browser/provenance_bypass_store.h b/components/provenance_gate/browser/provenance_bypass_store.h
+new file mode 100644
+index 0000000000..81b0ec552c
+--- /dev/null
++++ b/components/provenance_gate/browser/provenance_bypass_store.h
+@@ -0,0 +1,39 @@
++// Copyright 2026 The yubi-OS Authors. BSD-3-Clause (matches Chromium).
++#ifndef COMPONENTS_PROVENANCE_GATE_BROWSER_PROVENANCE_BYPASS_STORE_H_
++#define COMPONENTS_PROVENANCE_GATE_BROWSER_PROVENANCE_BYPASS_STORE_H_
++
++#include <set>
++#include <string>
++
++#include "base/no_destructor.h"
++#include "base/synchronization/lock.h"
++#include "url/gurl.h"
++
++namespace provenance_gate {
++
++// Series 0012: in-memory store of origins the user chose to proceed to after
++// a provenance-gate block ("Proceed anyway"). Written when the gate throttle
++// sees a bypass-marked navigation, read by the throttle before policy
++// evaluation. In-memory only, browser-process lifetime. Mode
++// provenance_required never consults this store (fails closed).
++class ProvenanceBypassStore {
++ public:
++  static ProvenanceBypassStore& Get();
++
++  // If `url` carries the bypass marker query param, records the origin
++  // (sans param) as bypassed and returns true.
++  bool MaybeAdoptBypassRequest(const GURL& url);
++
++  bool IsBypassed(const GURL& url);
++
++ private:
++  friend class base::NoDestructor<ProvenanceBypassStore>;
++  ProvenanceBypassStore() = default;
++
++  base::Lock lock_;
++  std::set<std::string> bypassed_origins_;
++};
++
++}  // namespace provenance_gate
++
++#endif  // COMPONENTS_PROVENANCE_GATE_BROWSER_PROVENANCE_BYPASS_STORE_H_
+diff --git a/components/provenance_gate/browser/provenance_gate_throttle.cc b/components/provenance_gate/browser/provenance_gate_throttle.cc
+index a966cf0961..15324ec1b3 100644
+--- a/components/provenance_gate/browser/provenance_gate_throttle.cc
++++ b/components/provenance_gate/browser/provenance_gate_throttle.cc
+@@ -4,6 +4,7 @@
+ #include <vector>
+ 
+ #include "base/logging.h"
++#include "components/provenance_gate/browser/provenance_bypass_store.h"
+ #include "components/provenance_gate/browser/provenance_evidence_store.h"
+ #include "net/base/net_errors.h"
+ #include "url/gurl.h"
+@@ -26,6 +27,21 @@ void ProvenanceGateThrottle::WillProcessResponse(
+   // bytes); navigations to an origin with recorded evidence are evaluated
+   // against it. Mode A blocks on the recorded evidence (overridable); Mode
+   // B still fails closed regardless.
++  // Series 0012: a bypass-marked navigation records the user's
++  // proceed-anywhere choice for the origin, then loads (block-on-detect
++  // mode only; provenance_required fails closed).
++  if (policy_.mode == Mode::kBlockOnDetect) {
++    const bool adopted =
++        ProvenanceBypassStore::Get().MaybeAdoptBypassRequest(response_url);
++    const bool bypassed =
++        adopted || ProvenanceBypassStore::Get().IsBypassed(response_url);
++    if (bypassed) {
++      VLOG(1) << "provenance_gate: url=" << response_url.spec()
++              << " allow=1 reason=user_bypass";
++      return;
++    }
++  }
++
+   std::vector<Evidence> evidence =
+       ProvenanceEvidenceStore::Get().GetEvidenceForOrigin(response_url);
+   const auto decision = Evaluate(policy_, evidence);
