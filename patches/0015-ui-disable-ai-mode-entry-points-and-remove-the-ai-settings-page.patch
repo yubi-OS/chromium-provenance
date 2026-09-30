@@ -1,4 +1,4 @@
-From 3cdb934219000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From 841344998f000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: OMNI-AGENT <foil-copy-overrate@duck.com>
 Subject: [PATCH] ui: disable AI Mode entry points and remove the AI settings page (series 0015)
 
@@ -32,10 +32,22 @@ index 42854fe444..6a02f18cdd 100644
  
    content::WebUIDataSource::Update(
 diff --git a/components/omnibox/browser/aim_eligibility_service.cc b/components/omnibox/browser/aim_eligibility_service.cc
-index 5e1a8533f2..157f5931b7 100644
+index 5e1a8533f2..ee6d3f6f34 100644
 --- a/components/omnibox/browser/aim_eligibility_service.cc
 +++ b/components/omnibox/browser/aim_eligibility_service.cc
-@@ -774,6 +774,10 @@ std::string AimEligibilityService::RequestSourceToString(RequestSource source) {
+@@ -461,6 +461,11 @@ bool AimEligibilityService::IsAimLocallyEligible() const {
+ }
+ 
+ bool AimEligibilityService::IsAimEligible() const {
++  // Series 0015 fixup: yubiOS kill switch - the provenance gate replaces AI
++  // Mode. The omnibox entrypoint check (omnibox_field_trial
++  // IsAimOmniboxEntrypointEnabled) calls IsAimEligible() DIRECTLY and never
++  // reaches IsEligibleByServer(), so the kill switch lives here as well.
++  return false;
+   // Check local eligibility first.
+   if (!IsAimLocallyEligible()) {
+     return false;
+@@ -774,6 +779,10 @@ std::string AimEligibilityService::RequestSourceToString(RequestSource source) {
  }
  
  bool AimEligibilityService::IsEligibleByServer(bool server_eligibility) const {
