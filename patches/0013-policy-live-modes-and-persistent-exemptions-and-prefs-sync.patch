@@ -344,6 +344,139 @@ index ac612dbb77..7a2fc3b5e9 100644
      if (const LocationBarModel* model = location_bar->GetLocationBarModel()) {
        url = model->GetURL();
      }
+diff --git a/chrome/browser/ui/views/location_bar/provenance_chip_view.h b/chrome/browser/ui/views/location_bar/provenance_chip_view.h
+index 83d040ee76..7896564b14 100644
+--- a/chrome/browser/ui/views/location_bar/provenance_chip_view.h
++++ b/chrome/browser/ui/views/location_bar/provenance_chip_view.h
+@@ -5,9 +5,7 @@
+ #include <memory>
+ 
+ #include "base/memory/weak_ptr.h"
+-#include "third_party/skia/include/core/SkColor.h"
+-#include "ui/base/metadata/metadata_header_macros.h"
+-#include "ui/views/controls/label.h"
++#include "chrome/browser/ui/views/location_bar/omnibox_chip_button.h"
+ #include "url/gurl.h"
+ 
+ namespace content {
+@@ -27,17 +25,22 @@ class ProvenanceEvidenceStore;
+ // forbids "human-verified" claims); manifest signature validation lands
+ // with the c2pa-rs vendoring follow-up.
+ //
++// Series 0011 fixup: the chip is a smart chip (OmniboxChipButton, the same
++// class the omnibox's AI Mode chip used) instead of a plain label. A click
++// opens chrome://settings/provenance in a new foreground tab; the tooltip
++// reports whether AI content blocking is enabled for the current mode.
++//
+ // Refresh model: a persistent 500ms poll is the source of truth. There is
+ // no reliable post-commit update hook for the location bar
+ // (LocationBarView::Update fires once, pre-commit, with a transiently empty
+-// URL — instrumented), so the chip tracks the displayed URL on a timer; a
++// URL - instrumented), so the chip tracks the displayed URL on a timer; a
+ // map lookup + string compare per tick is negligible. The evidence store's
+ // observer notification (UI thread) additionally refreshes the chip the
+ // moment evidence lands, and Update() acts as an immediate-refresh trigger
+-// only — it never clears chip state, because transient null updates
++// only - it never clears chip state, because transient null updates
+ // (init, blocked navigations) must not hide an evidenced chip.
+-class ProvenanceChipView : public views::Label {
+- METADATA_HEADER(ProvenanceChipView, views::Label)
++class ProvenanceChipView : public OmniboxChipButton {
++  METADATA_HEADER(ProvenanceChipView, OmniboxChipButton)
+ 
+  public:
+   ProvenanceChipView();
+@@ -57,6 +60,7 @@ class ProvenanceChipView : public views::Label {
+ 
+   void RefreshEvidence();
+   void OnEvidenceRecorded(const GURL& page_origin);
++  void OnChipPressed();
+ 
+   GURL url_;
+   bool last_ai_ = false;
+
+diff --git a/chrome/browser/ui/views/location_bar/provenance_chip_view.cc b/chrome/browser/ui/views/location_bar/provenance_chip_view.cc
+index 7a2fc3b5e9..ba9fe005d2 100644
+--- a/chrome/browser/ui/views/location_bar/provenance_chip_view.cc
++++ b/chrome/browser/ui/views/location_bar/provenance_chip_view.cc
+@@ -4,15 +4,16 @@
+ #include "base/logging.h"
+ #include "base/task/sequenced_task_runner.h"
+ #include "base/time/time.h"
+-#include "chrome/browser/ui/views/chrome_typography.h"
+ #include "chrome/browser/profiles/profile.h"
+ #include "chrome/browser/provenance/provenance_prefs_service_factory.h"
++#include "chrome/browser/ui/navigator/browser_navigator.h"
++#include "chrome/browser/ui/navigator/browser_navigator_params.h"
+ #include "chrome/browser/ui/views/location_bar/location_bar_view.h"
+ #include "components/omnibox/browser/location_bar_model.h"
+ #include "components/provenance_gate/browser/provenance_evidence_store.h"
++#include "components/provenance_gate/browser/provenance_policy_store.h"
+ #include "content/public/browser/web_contents.h"
+ #include "ui/base/metadata/metadata_impl_macros.h"
+-#include "ui/views/style/typography.h"
+ #include "url/origin.h"
+ 
+ namespace {
+@@ -45,9 +46,12 @@ class ProvenanceChipView::EvidenceObserver
+ };
+ 
+ ProvenanceChipView::ProvenanceChipView()
+-    : views::Label(std::u16string(),
+-                   CONTEXT_OMNIBOX_PRIMARY,
+-                   views::style::STYLE_PRIMARY) {
++    : OmniboxChipButton(views::Button::PressedCallback(base::BindRepeating(
++          &ProvenanceChipView::OnChipPressed, base::Unretained(this)))) {
++  // The chip is a permanently expanded smart chip: OmniboxChipButton's
++  // collapse animation starts at zero (icon-only width); this chip has no
++  // icon, so start fully expanded.
++  ResetAnimation(1.0);
+   SetVisible(false);
+   evidence_observer_ =
+       std::make_unique<EvidenceObserver>(weak_factory_.GetWeakPtr());
+@@ -74,6 +78,24 @@ void ProvenanceChipView::OnEvidenceRecorded(const GURL& page_origin) {
+   }
+ }
+ 
++void ProvenanceChipView::OnChipPressed() {
++  content::WebContents* contents = nullptr;
++  if (auto* location_bar = static_cast<LocationBarView*>(parent())) {
++    contents = location_bar->GetWebContents();
++  }
++  if (!contents) {
++    return;
++  }
++  // The profile-based NavigateParams constructor picks the right browser
++  // window on this tree (browser_finder.h does not exist here).
++  NavigateParams params(
++      Profile::FromBrowserContext(contents->GetBrowserContext()),
++      GURL("chrome://settings/provenance"), ui::PAGE_TRANSITION_TYPED);
++  params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
++  // Navigate is in the global namespace on this tree (not chrome::).
++  ::Navigate(&params);
++}
++
+ void ProvenanceChipView::RefreshEvidence() {
+   // The DISPLAYED url (LocationBarModel), not the last-committed one: on a
+   // blocked reload the omnibox keeps showing the attempted origin, and the
+@@ -108,10 +130,13 @@ void ProvenanceChipView::RefreshEvidence() {
+   SetVisible(ai_detected);
+   if (ai_detected) {
+     SetText(u"AI CONTENT");
++    // Series 0011 fixup: the tooltip reports the blocking mode - "AI content
++    // blocking enabled" when a blocking mode is set.
+     SetTooltipText(
+-        u"A C2PA manifest on this page claims AI-generated content "
+-        u"(unverified)");
+-    SetEnabledColor(SkColorSetRGB(0xD9, 0x30, 0x25));
++        provenance_gate::ProvenancePolicyStore::Get().mode() ==
++                provenance_gate::Mode::kOff
++            ? u"AI content blocking off"
++            : u"AI content blocking enabled");
+   }
+ 
+   base::SequencedTaskRunner::GetCurrentDefault()->PostDelayedTask(
+
 diff --git a/chrome/common/pref_names.h b/chrome/common/pref_names.h
 index 03d2b7db06..553b111803 100644
 --- a/chrome/common/pref_names.h
