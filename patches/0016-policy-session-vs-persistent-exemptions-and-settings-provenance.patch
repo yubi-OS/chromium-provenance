@@ -1,4 +1,4 @@
-From 730103a1e4000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From 70d59a6da9000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: OMNI-AGENT <foil-copy-overrate@duck.com>
 Subject: [PATCH] policy: session-vs-persistent exemptions + chrome://settings/provenance (series 0016)
 
@@ -203,40 +203,38 @@ index 976b9be21f..bb2fa57a1b 100644
      "autofill_page/autofill_ai_entries_list.ts",
 diff --git a/chrome/browser/resources/settings/provenance_page/provenance_page.html b/chrome/browser/resources/settings/provenance_page/provenance_page.html
 new file mode 100644
-index 0000000000..e70f6e1522
+index 0000000000..9ae70986bf
 --- /dev/null
 +++ b/chrome/browser/resources/settings/provenance_page/provenance_page.html
-@@ -0,0 +1,84 @@
+@@ -0,0 +1,90 @@
 +<style include="settings-shared">
-+  .prov-mode {
++  .prov-section {
++    padding: 0 24px 12px;
++  }
++
++  .prov-section .section-desc {
++    color: var(--cr-secondary-text-color, #666);
++    margin: 0 0 8px;
++  }
++
++  cr-radio-group {
 +    display: flex;
 +    flex-direction: column;
-+    padding: 12px 16px;
-+    cursor: pointer;
-+    border: 1px solid var(--cr-border-color, #ccc);
-+    border-radius: 6px;
-+    margin-bottom: 8px;
++    gap: 4px;
 +  }
 +
-+  .prov-mode[selected] {
-+    border-color: #c52219;
-+    background: rgba(197, 34, 25, 0.06);
-+  }
-+
-+  .prov-mode .title {
-+    font-weight: 600;
-+  }
-+
-+  .prov-mode .secondary {
++  cr-radio-button .secondary {
 +    color: var(--cr-secondary-text-color, #666);
++    display: block;
 +    font-size: 12px;
++    margin-top: 2px;
 +  }
 +
 +  .prov-exempt-row {
-+    display: flex;
 +    align-items: center;
++    display: flex;
 +    justify-content: space-between;
-+    padding: 6px 0;
++    padding: 4px 0;
 +  }
 +
 +  .prov-exempt-row span {
@@ -244,62 +242,74 @@ index 0000000000..e70f6e1522
 +    font-size: 12px;
 +  }
 +
-+  .prov-add-row {
-+    display: flex;
-+    gap: 8px;
-+    margin-top: 8px;
++  .prov-empty {
++    color: var(--cr-secondary-text-color, #666);
++    font-size: 12px;
++    padding: 4px 0;
 +  }
 +
-+  .prov-add-row input {
++  .prov-add-row {
++    display: flex;
++    gap: 12px;
++    margin-top: 12px;
++  }
++
++  .prov-add-row cr-input {
 +    flex: 1;
 +  }
 +</style>
 +<div class="settings-box first">
 +  <h2>Provenance gate</h2>
 +</div>
-+<div class="settings-box">
-+  <p>Choose how pages with AI-generated content claims are handled.</p>
-+  <div class="prov-mode" data-mode="off" selected$="[[isMode_('off')]]"
-+      on-click="onModeClick_">
-+    <div class="title">Off</div>
-+    <div class="secondary">Full opt-out: nothing is detected or blocked.</div>
-+  </div>
-+  <div class="prov-mode" data-mode="soft_block_images"
-+      selected$="[[isMode_('soft_block_images')]]" on-click="onModeClick_">
-+    <div class="title">Soft block</div>
-+    <div class="secondary">Pages render; images with AI-content claims are
-+      replaced with notices (each with its own allow option).</div>
-+  </div>
-+  <div class="prov-mode" data-mode="block_on_detect"
-+      selected$="[[isMode_('block_on_detect')]]" on-click="onModeClick_">
-+    <div class="title">Full block</div>
-+    <div class="secondary">Pages with AI-generated content are blocked with an
-+      interstitial; you can proceed for the current session.</div>
-+  </div>
++<div class="prov-section">
++  <p class="section-desc">Choose how pages with AI-generated content claims are handled.</p>
++  <cr-radio-group selected="{{mode_}}" on-change="onModeChange_">
++    <cr-radio-button name="off">
++      <span>Off</span>
++      <div class="secondary">Full opt-out: nothing is detected or blocked.</div>
++    </cr-radio-button>
++    <cr-radio-button name="soft_block_images">
++      <span>Soft block</span>
++      <div class="secondary">Pages render; images with AI-content claims are replaced
++        with notices, each with its own allow option.</div>
++    </cr-radio-button>
++    <cr-radio-button name="block_on_detect">
++      <span>Full block</span>
++      <div class="secondary">Pages with AI-generated content are blocked with an
++        interstitial; you can proceed for the current session.</div>
++    </cr-radio-button>
++  </cr-radio-group>
 +</div>
 +<div class="settings-box">
 +  <h2>Exempt sites</h2>
-+  <p>Sites on this list are never blocked by the provenance gate.</p>
++</div>
++<div class="prov-section">
++  <p class="section-desc">Sites on this list are never blocked by the provenance gate.</p>
 +  <template is="dom-repeat" items="[[exemptOrigins_]]">
 +    <div class="prov-exempt-row">
 +      <span>[[item]]</span>
-+      <button data-origin$="[[item]]" on-click="onRemoveClick_">Remove</button>
++      <cr-button class="prov-remove" data-origin$="[[item]]" on-click="onRemoveClick_">Remove</cr-button>
 +    </div>
 +  </template>
++  <div class="prov-empty" hidden$="[[exemptOrigins_.length]]">No sites are exempt.</div>
 +  <div class="prov-add-row">
-+    <input value="{{newOrigin_::input}}" placeholder="example.com">
-+    <button on-click="onAdd_">Add</button>
++    <cr-input label="Add a site" placeholder="example.com" value="{{newOrigin_}}"></cr-input>
++    <cr-button class="prov-add" on-click="onAdd_">Add</cr-button>
 +  </div>
 +</div>
 diff --git a/chrome/browser/resources/settings/provenance_page/provenance_page.ts b/chrome/browser/resources/settings/provenance_page/provenance_page.ts
 new file mode 100644
-index 0000000000..4d26a3bd49
+index 0000000000..6dc6d36c95
 --- /dev/null
 +++ b/chrome/browser/resources/settings/provenance_page/provenance_page.ts
-@@ -0,0 +1,95 @@
+@@ -0,0 +1,94 @@
 +// Copyright 2026 The yubi-OS Authors. BSD-3-Clause (matches Chromium).
 +import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 +import {getTemplate} from './provenance_page.html.js';
++import 'chrome://resources/cr_elements/cr_button/cr_button.js';
++import 'chrome://resources/cr_elements/cr_input/cr_input.js';
++import 'chrome://resources/cr_elements/cr_radio_button/cr_radio_button.js';
++import 'chrome://resources/cr_elements/cr_radio_group/cr_radio_group.js';
 +
 +interface ChromeSend {
 +  send(name: string, args?: unknown[]): void;
@@ -335,10 +345,10 @@ index 0000000000..4d26a3bd49
 +  override connectedCallback() {
 +    super.connectedCallback();
 +    (window as unknown as {provenanceStateReady: unknown}).provenanceStateReady =
-+        (state: {mode: string, exemptOrigins: string}) => {
-+          this.mode_ = state.mode;
++        (mode: string, exemptOrigins: string) => {
++          this.mode_ = mode;
 +          this.exemptOrigins_ =
-+              state.exemptOrigins ? state.exemptOrigins.split(',').filter(
++              exemptOrigins ? exemptOrigins.split(',').filter(
 +                  (o: string) => o.length > 0) : [];
 +        };
 +    this.refresh_();
@@ -348,16 +358,11 @@ index 0000000000..4d26a3bd49
 +    chromeSend().send('getProvenanceState');
 +  }
 +
-+  private isMode_(mode: string): boolean {
-+    return this.mode_ === mode;
-+  }
-+
-+  private onModeClick_(e: Event) {
-+    const mode = (e.currentTarget as HTMLElement).dataset['mode'] || '';
++  private onModeChange_(e: Event) {
++    const mode = (e.target as unknown as {selected: string}).selected;
 +    if (MODES.indexOf(mode) === -1) {
 +      return;
 +    }
-+    this.mode_ = mode;
 +    chromeSend().send('setProvenanceMode', [mode]);
 +  }
 +
