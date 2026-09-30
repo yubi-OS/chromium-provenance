@@ -1,0 +1,673 @@
+From 5daf51a7bf000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: OMNI-AGENT <foil-copy-overrate@duck.com>
+Subject: [PATCH] policy: live modes + persistent exemptions + prefs sync (series 0013)
+
+---
+diff --git a/chrome/browser/prefs/browser_prefs.cc b/chrome/browser/prefs/browser_prefs.cc
+index b0923f5e9c..ea634f1e71 100644
+--- a/chrome/browser/prefs/browser_prefs.cc
++++ b/chrome/browser/prefs/browser_prefs.cc
+@@ -1755,6 +1755,9 @@ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry,
+   TRACE_EVENT0("browser", "chrome::RegisterProfilePrefs");
+   // User prefs. Please keep this list alphabetized.
+   AccessibilityLabelsService::RegisterProfilePrefs(registry);
++  registry->RegisterStringPref(prefs::kProvenanceMode,
++                               std::string("block_on_detect"));
++  registry->RegisterStringPref(prefs::kProvenanceExemptOrigins, std::string());
+   AccessibilityUIMessageHandler::RegisterProfilePrefs(registry);
+   accessibility_annotator::prefs::RegisterProfilePrefs(registry);
+   AimEligibilityService::RegisterProfilePrefs(registry);
+diff --git a/chrome/browser/profiles/chrome_browser_main_extra_parts_profiles.cc b/chrome/browser/profiles/chrome_browser_main_extra_parts_profiles.cc
+index de5cbeb641..1b45ef73ad 100644
+--- a/chrome/browser/profiles/chrome_browser_main_extra_parts_profiles.cc
++++ b/chrome/browser/profiles/chrome_browser_main_extra_parts_profiles.cc
+@@ -131,6 +131,7 @@
+ #include "chrome/browser/media/router/chrome_media_router_factory.h"
+ #include "chrome/browser/media/router/presentation/chrome_local_presentation_manager_factory.h"
+ #include "chrome/browser/media/webrtc/media_device_salt_service_factory.h"
++#include "chrome/browser/provenance/provenance_prefs_service_factory.h"
+ #include "chrome/browser/media/webrtc/webrtc_event_log_manager_keyed_service_factory.h"
+ #include "chrome/browser/metrics/profile_metrics_service_factory.h"
+ #include "chrome/browser/metrics/variations/google_groups_manager_factory.h"
+@@ -1619,6 +1620,7 @@ void ChromeBrowserMainExtraPartsProfiles::
+ 
+   WebDataServiceFactory::GetInstance();
+   webrtc_event_logging::WebRtcEventLogManagerKeyedServiceFactory::GetInstance();
++  provenance::ProvenancePrefsServiceFactory::GetInstance();
+ }
+ 
+ void ChromeBrowserMainExtraPartsProfiles::PreProfileInit() {
+diff --git a/chrome/browser/provenance/BUILD.gn b/chrome/browser/provenance/BUILD.gn
+index 6b48a5a8c2..50539d29d1 100644
+--- a/chrome/browser/provenance/BUILD.gn
++++ b/chrome/browser/provenance/BUILD.gn
+@@ -3,9 +3,17 @@ source_set("provenance") {
+   sources = [
+     "provenance_navigation_throttle.cc",
+     "provenance_navigation_throttle.h",
++    "provenance_prefs_service.cc",
++    "provenance_prefs_service.h",
++    "provenance_prefs_service_factory.cc",
++    "provenance_prefs_service_factory.h",
+   ]
+   deps = [
+     "//base",
++    "//chrome/browser/profiles:profile",
++    "//chrome/common",
++    "//components/keyed_service/core",
++    "//components/prefs",
+     "//components/provenance_gate:browser",
+     "//content/public/browser",
+     "//net",
+diff --git a/chrome/browser/provenance/provenance_navigation_throttle.cc b/chrome/browser/provenance/provenance_navigation_throttle.cc
+index 71a2d4a376..cac44c7859 100644
+--- a/chrome/browser/provenance/provenance_navigation_throttle.cc
++++ b/chrome/browser/provenance/provenance_navigation_throttle.cc
+@@ -11,6 +11,7 @@
+ #include "base/strings/stringprintf.h"
+ #include "components/provenance_gate/browser/provenance_bypass_store.h"
+ #include "components/provenance_gate/browser/provenance_evidence_store.h"
++#include "components/provenance_gate/browser/provenance_policy_store.h"
+ #include "content/public/browser/navigation_handle.h"
+ #include "net/base/net_errors.h"
+ #include "url/gurl.h"
+@@ -25,8 +26,9 @@ namespace {
+ constexpr const char kBypassMarker[] = "__provenance_bypass=1";
+ 
+ bool ProvenanceRequiredMode() {
+-  return base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
+-             "provenance-mode") == "provenance-required";
++  // Series 0013: live mode from the prefs-synced store.
++  return provenance_gate::ProvenancePolicyStore::Get().mode() ==
++         provenance_gate::Mode::kProvenanceRequired;
+ }
+ 
+ std::string EscapeHTML(const std::string& in) {
+diff --git a/chrome/browser/provenance/provenance_prefs_service.cc b/chrome/browser/provenance/provenance_prefs_service.cc
+new file mode 100644
+index 0000000000..0182c2a1c2
+--- /dev/null
++++ b/chrome/browser/provenance/provenance_prefs_service.cc
+@@ -0,0 +1,82 @@
++// Copyright 2026 The yubi-OS Authors. BSD-3-Clause (matches Chromium).
++#include "chrome/browser/provenance/provenance_prefs_service.h"
++
++#include <string>
++
++#include "base/callback_list.h"
++#include "base/logging.h"
++#include "base/strings/string_split.h"
++#include "base/strings/string_util.h"
++#include "chrome/common/pref_names.h"
++#include "components/prefs/pref_service.h"
++#include "components/provenance_gate/browser/provenance_bypass_store.h"
++#include "components/provenance_gate/browser/provenance_policy_store.h"
++
++namespace provenance {
++
++namespace {
++std::string JoinOrigins(const std::vector<std::string>& origins) {
++  std::string joined;
++  for (const std::string& origin : origins) {
++    if (!joined.empty()) {
++      joined += ",";
++    }
++    joined += origin;
++  }
++  return joined;
++}
++}  // namespace
++
++ProvenancePrefsService::ProvenancePrefsService(PrefService* prefs)
++    : prefs_(prefs) {
++  pref_change_registrar_.Init(prefs_);
++  pref_change_registrar_.Add(
++      prefs::kProvenanceMode,
++      base::BindRepeating(&ProvenancePrefsService::SyncFromPrefs,
++                          base::Unretained(this)));
++  pref_change_registrar_.Add(
++      prefs::kProvenanceExemptOrigins,
++      base::BindRepeating(&ProvenancePrefsService::SyncFromPrefs,
++                          base::Unretained(this)));
++  exemption_subscription_ =
++      provenance_gate::ProvenanceBypassStore::Get().AddExemptionChangedCallback(
++          base::BindRepeating(&ProvenancePrefsService::OnExemptionChanged,
++                              base::Unretained(this)));
++  SyncFromPrefs();
++}
++
++ProvenancePrefsService::~ProvenancePrefsService() = default;
++
++void ProvenancePrefsService::SyncFromPrefs() {
++  syncing_from_prefs_ = true;
++  provenance_gate::Mode mode = provenance_gate::Mode::kBlockOnDetect;
++  if (provenance_gate::ModeFromString(
++          prefs_->GetString(prefs::kProvenanceMode), &mode)) {
++    provenance_gate::ProvenancePolicyStore::Get().SetMode(mode);
++    VLOG(1) << "provenance_gate: prefs mode="
++            << provenance_gate::ModeToString(mode);
++  }
++  for (const std::string& origin :
++       base::SplitString(prefs_->GetString(prefs::kProvenanceExemptOrigins),
++                         ",", base::TRIM_WHITESPACE,
++                         base::SPLIT_WANT_NONEMPTY)) {
++    provenance_gate::ProvenanceBypassStore::Get().AddExemptionSilent(origin);
++  }
++  syncing_from_prefs_ = false;
++}
++
++void ProvenancePrefsService::WriteExemptionsToPrefs() {
++  prefs_->SetString(
++      prefs::kProvenanceExemptOrigins,
++      JoinOrigins(provenance_gate::ProvenanceBypassStore::Get().exemptions()));
++}
++
++void ProvenancePrefsService::OnExemptionChanged(const std::string& origin_key) {
++  if (syncing_from_prefs_) {
++    return;
++  }
++  VLOG(1) << "provenance_gate: exemption persisted " << origin_key;
++  WriteExemptionsToPrefs();
++}
++
++}  // namespace provenance
+diff --git a/chrome/browser/provenance/provenance_prefs_service.h b/chrome/browser/provenance/provenance_prefs_service.h
+new file mode 100644
+index 0000000000..0a43d08bbb
+--- /dev/null
++++ b/chrome/browser/provenance/provenance_prefs_service.h
+@@ -0,0 +1,42 @@
++// Copyright 2026 The yubi-OS Authors. BSD-3-Clause (matches Chromium).
++#ifndef CHROME_BROWSER_PROVENANCE_PROVENANCE_PREFS_SERVICE_H_
++#define CHROME_BROWSER_PROVENANCE_PROVENANCE_PREFS_SERVICE_H_
++
++#include <string>
++
++#include "base/callback_list.h"
++#include "base/memory/raw_ptr.h"
++#include "components/keyed_service/core/keyed_service.h"
++#include "components/prefs/pref_change_registrar.h"
++
++class PrefService;
++
++namespace provenance {
++
++// Series 0013: keeps the provenance prefs (mode + exempt origins) and the
++// in-process stores (ProvenancePolicyStore, ProvenanceBypassStore) in sync.
++// Prefs are the source of truth; the stores are the live view the gate
++// throttle reads. Store-side exemption changes (interstitial Proceed, the
++// soft-mode Allow) write through to prefs.
++class ProvenancePrefsService : public KeyedService {
++ public:
++  explicit ProvenancePrefsService(PrefService* prefs);
++  ~ProvenancePrefsService() override;
++
++  ProvenancePrefsService(const ProvenancePrefsService&) = delete;
++  ProvenancePrefsService& operator=(const ProvenancePrefsService&) = delete;
++
++ private:
++  void SyncFromPrefs();
++  void WriteExemptionsToPrefs();
++  void OnExemptionChanged(const std::string& origin_key);
++
++  raw_ptr<PrefService> prefs_;
++  PrefChangeRegistrar pref_change_registrar_;
++  base::CallbackListSubscription exemption_subscription_;
++  bool syncing_from_prefs_ = false;
++};
++
++}  // namespace provenance
++
++#endif  // CHROME_BROWSER_PROVENANCE_PROVENANCE_PREFS_SERVICE_H_
+diff --git a/chrome/browser/provenance/provenance_prefs_service_factory.cc b/chrome/browser/provenance/provenance_prefs_service_factory.cc
+new file mode 100644
+index 0000000000..8a2dbd3a33
+--- /dev/null
++++ b/chrome/browser/provenance/provenance_prefs_service_factory.cc
+@@ -0,0 +1,35 @@
++// Copyright 2026 The yubi-OS Authors. BSD-3-Clause (matches Chromium).
++#include "chrome/browser/provenance/provenance_prefs_service_factory.h"
++
++#include <utility>
++
++#include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/provenance/provenance_prefs_service.h"
++#include "components/keyed_service/core/keyed_service.h"
++
++namespace provenance {
++
++// static
++ProvenancePrefsService* ProvenancePrefsServiceFactory::GetForProfile(
++    Profile* profile) {
++  return static_cast<ProvenancePrefsService*>(
++      GetInstance()->GetServiceForBrowserContext(profile, /*create=*/true));
++}
++
++// static
++ProvenancePrefsServiceFactory* ProvenancePrefsServiceFactory::GetInstance() {
++  static base::NoDestructor<ProvenancePrefsServiceFactory> instance;
++  return instance.get();
++}
++
++ProvenancePrefsServiceFactory::ProvenancePrefsServiceFactory()
++    : ProfileKeyedServiceFactory("ProvenancePrefsService") {}
++
++std::unique_ptr<KeyedService>
++ProvenancePrefsServiceFactory::BuildServiceInstanceForBrowserContext(
++    content::BrowserContext* context) const {
++  Profile* profile = Profile::FromBrowserContext(context);
++  return std::make_unique<ProvenancePrefsService>(profile->GetPrefs());
++}
++
++}  // namespace provenance
+diff --git a/chrome/browser/provenance/provenance_prefs_service_factory.h b/chrome/browser/provenance/provenance_prefs_service_factory.h
+new file mode 100644
+index 0000000000..4d67c2017d
+--- /dev/null
++++ b/chrome/browser/provenance/provenance_prefs_service_factory.h
+@@ -0,0 +1,40 @@
++// Copyright 2026 The yubi-OS Authors. BSD-3-Clause (matches Chromium).
++#ifndef CHROME_BROWSER_PROVENANCE_PROVENANCE_PREFS_SERVICE_FACTORY_H_
++#define CHROME_BROWSER_PROVENANCE_PROVENANCE_PREFS_SERVICE_FACTORY_H_
++
++#include <memory>
++
++#include "base/no_destructor.h"
++#include "chrome/browser/profiles/profile_keyed_service_factory.h"
++
++class Profile;
++
++namespace content {
++class BrowserContext;
++}
++
++namespace provenance {
++
++class ProvenancePrefsService;
++
++// Series 0013: per-profile sync between provenance prefs and the gate's
++// in-process stores. Created on the first location-bar refresh (the chip's
++// RefreshEvidence) so the stores reflect prefs before any gate decision.
++class ProvenancePrefsServiceFactory : public ProfileKeyedServiceFactory {
++ public:
++  static ProvenancePrefsService* GetForProfile(Profile* profile);
++  static ProvenancePrefsServiceFactory* GetInstance();
++
++ private:
++  friend class base::NoDestructor<ProvenancePrefsServiceFactory>;
++  ProvenancePrefsServiceFactory();
++  ~ProvenancePrefsServiceFactory() override = default;
++
++  // BrowserContextKeyedServiceFactory:
++  std::unique_ptr<KeyedService> BuildServiceInstanceForBrowserContext(
++      content::BrowserContext* context) const override;
++};
++
++}  // namespace provenance
++
++#endif  // CHROME_BROWSER_PROVENANCE_PROVENANCE_PREFS_SERVICE_FACTORY_H_
+diff --git a/chrome/browser/ui/views/location_bar/BUILD.gn b/chrome/browser/ui/views/location_bar/BUILD.gn
+index 85b03751fe..da7cfd887a 100644
+--- a/chrome/browser/ui/views/location_bar/BUILD.gn
++++ b/chrome/browser/ui/views/location_bar/BUILD.gn
+@@ -52,6 +52,7 @@ source_set("location_bar") {
+       "//components/browser_apis/ui_controllers/toolbar:mojom_data_model",
+       "//components/browser_apis/ui_controllers/toolbar:types",
+       "//components/omnibox/browser:location_bar",
++      "//chrome/browser/provenance",
+       "//components/provenance_gate:browser",
+       "//components/page_info/core",
+       "//components/record_replay/core/browser",
+diff --git a/chrome/browser/ui/views/location_bar/provenance_chip_view.cc b/chrome/browser/ui/views/location_bar/provenance_chip_view.cc
+index ac612dbb77..7a2fc3b5e9 100644
+--- a/chrome/browser/ui/views/location_bar/provenance_chip_view.cc
++++ b/chrome/browser/ui/views/location_bar/provenance_chip_view.cc
+@@ -5,6 +5,8 @@
+ #include "base/task/sequenced_task_runner.h"
+ #include "base/time/time.h"
+ #include "chrome/browser/ui/views/chrome_typography.h"
++#include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/provenance/provenance_prefs_service_factory.h"
+ #include "chrome/browser/ui/views/location_bar/location_bar_view.h"
+ #include "components/omnibox/browser/location_bar_model.h"
+ #include "components/provenance_gate/browser/provenance_evidence_store.h"
+@@ -78,6 +80,12 @@ void ProvenanceChipView::RefreshEvidence() {
+   // chip should keep reporting it.
+   GURL url;
+   if (auto* location_bar = static_cast<LocationBarView*>(parent())) {
++    // Series 0013: keep prefs <-> stores in sync (mode + exemptions); the
++    // factory returns the existing service after the first call.
++    if (content::WebContents* contents = location_bar->GetWebContents()) {
++      provenance::ProvenancePrefsServiceFactory::GetForProfile(
++          Profile::FromBrowserContext(contents->GetBrowserContext()));
++    }
+     if (const LocationBarModel* model = location_bar->GetLocationBarModel()) {
+       url = model->GetURL();
+     }
+diff --git a/chrome/common/pref_names.h b/chrome/common/pref_names.h
+index 03d2b7db06..553b111803 100644
+--- a/chrome/common/pref_names.h
++++ b/chrome/common/pref_names.h
+@@ -3291,6 +3291,11 @@ inline constexpr char kCpuPerformanceTierOverride[] =
+ // Value indicating that the CPU performance tier has not been overridden.
+ inline constexpr int kCpuPerformanceTierOverrideNone = -1;
+ 
++// Series 0013: provenance gate settings.
++inline constexpr char kProvenanceMode[] = "provenance.mode";
++inline constexpr char kProvenanceExemptOrigins[] =
++    "provenance.exempt_origins";
++
+ }  // namespace prefs
+ 
+ #endif  // CHROME_COMMON_PREF_NAMES_H_
+diff --git a/components/provenance_gate/BUILD.gn b/components/provenance_gate/BUILD.gn
+index 308dcd6784..2692723933 100644
+--- a/components/provenance_gate/BUILD.gn
++++ b/components/provenance_gate/BUILD.gn
+@@ -31,6 +31,8 @@ source_set("browser") {
+   sources = [
+     "browser/provenance_bypass_store.cc",
+     "browser/provenance_bypass_store.h",
++    "browser/provenance_policy_store.cc",
++    "browser/provenance_policy_store.h",
+     "browser/provenance_evidence_store.cc",
+     "browser/provenance_evidence_store.h",
+     "browser/provenance_gate_throttle.cc",
+diff --git a/components/provenance_gate/browser/provenance_bypass_store.cc b/components/provenance_gate/browser/provenance_bypass_store.cc
+index 2ac001a99d..956523f0a2 100644
+--- a/components/provenance_gate/browser/provenance_bypass_store.cc
++++ b/components/provenance_gate/browser/provenance_bypass_store.cc
+@@ -26,9 +26,49 @@ bool ProvenanceBypassStore::MaybeAdoptBypassRequest(const GURL& url) {
+   replacements.ClearQuery();
+   const std::string origin_key =
+       url::Origin::Create(url.ReplaceComponents(replacements)).Serialize();
++  AddOriginKey(origin_key);
++  return true;
++}
++
++void ProvenanceBypassStore::AddOriginKey(const std::string& origin_key) {
++  bool added = false;
++  {
++    base::AutoLock lock(lock_);
++    added = bypassed_origins_.insert(origin_key).second;
++  }
++  if (added) {
++    // Notify outside the lock; the chrome prefs service writes through.
++    exemption_callbacks_.Notify(origin_key);
++  }
++}
++
++void ProvenanceBypassStore::AddExemption(const GURL& origin_url) {
++  if (!origin_url.is_valid()) {
++    return;
++  }
++  AddOriginKey(url::Origin::Create(origin_url).Serialize());
++}
++
++void ProvenanceBypassStore::AddExemptionSilent(const std::string& origin_key) {
+   base::AutoLock lock(lock_);
+   bypassed_origins_.insert(origin_key);
+-  return true;
++}
++
++void ProvenanceBypassStore::RemoveExemption(const std::string& origin_key) {
++  base::AutoLock lock(lock_);
++  bypassed_origins_.erase(origin_key);
++}
++
++std::vector<std::string> ProvenanceBypassStore::exemptions() {
++  base::AutoLock lock(lock_);
++  return std::vector<std::string>(bypassed_origins_.begin(),
++                                  bypassed_origins_.end());
++}
++
++base::CallbackListSubscription
++ProvenanceBypassStore::AddExemptionChangedCallback(
++    base::RepeatingCallback<void(const std::string& origin_key)> cb) {
++  return exemption_callbacks_.Add(std::move(cb));
+ }
+ 
+ bool ProvenanceBypassStore::IsBypassed(const GURL& url) {
+diff --git a/components/provenance_gate/browser/provenance_bypass_store.h b/components/provenance_gate/browser/provenance_bypass_store.h
+index 81b0ec552c..7f0bc19807 100644
+--- a/components/provenance_gate/browser/provenance_bypass_store.h
++++ b/components/provenance_gate/browser/provenance_bypass_store.h
+@@ -5,17 +5,22 @@
+ #include <set>
+ #include <string>
+ 
++#include "base/callback_list.h"
+ #include "base/no_destructor.h"
+ #include "base/synchronization/lock.h"
+ #include "url/gurl.h"
+ 
+ namespace provenance_gate {
+ 
+-// Series 0012: in-memory store of origins the user chose to proceed to after
+-// a provenance-gate block ("Proceed anyway"). Written when the gate throttle
++// Series 0012: stores origins the user chose to proceed to after a
++// provenance-gate block ("Proceed anyway"). Written when the gate throttle
+ // sees a bypass-marked navigation, read by the throttle before policy
+-// evaluation. In-memory only, browser-process lifetime. Mode
+-// provenance_required never consults this store (fails closed).
++// evaluation. Mode provenance_required never consults this store (fails
++// closed).
++// Series 0013: the store is now the exemption surface — chrome's
++// ProvenancePrefsService persists it to prefs and keeps it in sync (the
++// store stays the live view the throttle reads); content_shell keeps it
++// session-scoped.
+ class ProvenanceBypassStore {
+  public:
+   static ProvenanceBypassStore& Get();
+@@ -26,12 +31,26 @@ class ProvenanceBypassStore {
+ 
+   bool IsBypassed(const GURL& url);
+ 
++  // Series 0013: exemption surface. AddExemption notifies the exemption
++  // callbacks (the chrome prefs service writes through to prefs);
++  // AddExemptionSilent is for bulk loads from prefs.
++  void AddExemption(const GURL& origin_url);
++  void AddExemptionSilent(const std::string& origin_key);
++  void RemoveExemption(const std::string& origin_key);
++  std::vector<std::string> exemptions();
++  base::CallbackListSubscription AddExemptionChangedCallback(
++      base::RepeatingCallback<void(const std::string& origin_key)> cb);
++
+  private:
+   friend class base::NoDestructor<ProvenanceBypassStore>;
+   ProvenanceBypassStore() = default;
+ 
++  void AddOriginKey(const std::string& origin_key);
++
+   base::Lock lock_;
+   std::set<std::string> bypassed_origins_;
++  base::RepeatingCallbackList<void(const std::string&)>
++      exemption_callbacks_;
+ };
+ 
+ }  // namespace provenance_gate
+diff --git a/components/provenance_gate/browser/provenance_gate_throttle.cc b/components/provenance_gate/browser/provenance_gate_throttle.cc
+index 15324ec1b3..80b091fe7b 100644
+--- a/components/provenance_gate/browser/provenance_gate_throttle.cc
++++ b/components/provenance_gate/browser/provenance_gate_throttle.cc
+@@ -6,13 +6,18 @@
+ #include "base/logging.h"
+ #include "components/provenance_gate/browser/provenance_bypass_store.h"
+ #include "components/provenance_gate/browser/provenance_evidence_store.h"
++#include "components/provenance_gate/browser/provenance_policy_store.h"
+ #include "net/base/net_errors.h"
+ #include "url/gurl.h"
+ 
+ namespace provenance_gate {
+ 
+ ProvenanceGateThrottle::ProvenanceGateThrottle(const Policy& policy)
+-    : policy_(policy) {}
++    : policy_(policy) {
++  // Series 0013: seed the live mode store from the switch-derived policy
++  // (chrome's prefs service overrides it with the pref value).
++  ProvenancePolicyStore::Get().InitIfUnset(policy_.mode);
++}
+ 
+ ProvenanceGateThrottle::~ProvenanceGateThrottle() = default;
+ 
+@@ -27,10 +32,21 @@ void ProvenanceGateThrottle::WillProcessResponse(
+   // bytes); navigations to an origin with recorded evidence are evaluated
+   // against it. Mode A blocks on the recorded evidence (overridable); Mode
+   // B still fails closed regardless.
++  // Series 0013: consult the live mode (prefs-driven in chrome, switch in
++  // content_shell). kOff and kSoftBlockImages allow everything at the
++  // network layer; kSoftBlockImages enforcement is renderer-side (0014).
++  const Mode live_mode = ProvenancePolicyStore::Get().mode();
++  if (live_mode != Mode::kBlockOnDetect &&
++      live_mode != Mode::kProvenanceRequired) {
++    VLOG(1) << "provenance_gate: url=" << response_url.spec()
++            << " allow=1 reason=mode_no_block";
++    return;
++  }
++
+   // Series 0012: a bypass-marked navigation records the user's
+   // proceed-anywhere choice for the origin, then loads (block-on-detect
+   // mode only; provenance_required fails closed).
+-  if (policy_.mode == Mode::kBlockOnDetect) {
++  if (live_mode == Mode::kBlockOnDetect) {
+     const bool adopted =
+         ProvenanceBypassStore::Get().MaybeAdoptBypassRequest(response_url);
+     const bool bypassed =
+diff --git a/components/provenance_gate/browser/provenance_policy_store.cc b/components/provenance_gate/browser/provenance_policy_store.cc
+new file mode 100644
+index 0000000000..fd10706502
+--- /dev/null
++++ b/components/provenance_gate/browser/provenance_policy_store.cc
+@@ -0,0 +1,64 @@
++// Copyright 2026 The yubi-OS Authors. BSD-3-Clause (matches Chromium).
++#include "components/provenance_gate/browser/provenance_policy_store.h"
++
++namespace provenance_gate {
++
++ProvenancePolicyStore& ProvenancePolicyStore::Get() {
++  static base::NoDestructor<ProvenancePolicyStore> instance;
++  return *instance;
++}
++
++void ProvenancePolicyStore::InitIfUnset(Mode default_mode) {
++  base::AutoLock lock(lock_);
++  if (!initialized_) {
++    mode_ = default_mode;
++    initialized_ = true;
++  }
++}
++
++void ProvenancePolicyStore::SetMode(Mode mode) {
++  base::AutoLock lock(lock_);
++  mode_ = mode;
++  initialized_ = true;
++}
++
++Mode ProvenancePolicyStore::mode() {
++  base::AutoLock lock(lock_);
++  return mode_;
++}
++
++const char* ModeToString(Mode mode) {
++  switch (mode) {
++    case Mode::kBlockOnDetect:
++      return "block_on_detect";
++    case Mode::kProvenanceRequired:
++      return "provenance_required";
++    case Mode::kOff:
++      return "off";
++    case Mode::kSoftBlockImages:
++      return "soft_block_images";
++  }
++  return "block_on_detect";
++}
++
++bool ModeFromString(const std::string& s, Mode* out) {
++  if (s == "block_on_detect") {
++    *out = Mode::kBlockOnDetect;
++    return true;
++  }
++  if (s == "provenance_required") {
++    *out = Mode::kProvenanceRequired;
++    return true;
++  }
++  if (s == "off") {
++    *out = Mode::kOff;
++    return true;
++  }
++  if (s == "soft_block_images") {
++    *out = Mode::kSoftBlockImages;
++    return true;
++  }
++  return false;
++}
++
++}  // namespace provenance_gate
+diff --git a/components/provenance_gate/browser/provenance_policy_store.h b/components/provenance_gate/browser/provenance_policy_store.h
+new file mode 100644
+index 0000000000..8b7bddd6e2
+--- /dev/null
++++ b/components/provenance_gate/browser/provenance_policy_store.h
+@@ -0,0 +1,41 @@
++// Copyright 2026 The yubi-OS Authors. BSD-3-Clause (matches Chromium).
++#ifndef COMPONENTS_PROVENANCE_GATE_BROWSER_PROVENANCE_POLICY_STORE_H_
++#define COMPONENTS_PROVENANCE_GATE_BROWSER_PROVENANCE_POLICY_STORE_H_
++
++#include <string>
++
++#include "base/no_destructor.h"
++#include "base/synchronization/lock.h"
++#include "components/provenance_gate/policy.h"
++
++namespace provenance_gate {
++
++// Series 0013: process-wide live view of the gate mode. Chrome keeps it in
++// sync with the provenance prefs (ProvenancePrefsService); content_shell
++// seeds it from the --provenance-mode switch. The gate throttle reads the
++// live mode so runtime mode changes take effect without a restart.
++class ProvenancePolicyStore {
++ public:
++  static ProvenancePolicyStore& Get();
++
++  // Applies |default_mode| only if the mode was never explicitly set.
++  void InitIfUnset(Mode default_mode);
++  void SetMode(Mode mode);
++  Mode mode();
++
++ private:
++  friend class base::NoDestructor<ProvenancePolicyStore>;
++  ProvenancePolicyStore() = default;
++
++  base::Lock lock_;
++  Mode mode_ = Mode::kBlockOnDetect;
++  bool initialized_ = false;
++};
++
++// Mode <-> settings-string helpers (chrome prefs, --provenance-mode).
++const char* ModeToString(Mode mode);
++bool ModeFromString(const std::string& s, Mode* out);
++
++}  // namespace provenance_gate
++
++#endif  // COMPONENTS_PROVENANCE_GATE_BROWSER_PROVENANCE_POLICY_STORE_H_
+diff --git a/components/provenance_gate/policy.h b/components/provenance_gate/policy.h
+index 3383f28068..a6160a0a5a 100644
+--- a/components/provenance_gate/policy.h
++++ b/components/provenance_gate/policy.h
+@@ -8,7 +8,15 @@
+ 
+ namespace provenance_gate {
+ 
+-enum class Mode { kBlockOnDetect, kProvenanceRequired };
++enum class Mode {
++  kBlockOnDetect,
++  kProvenanceRequired,
++  // Series 0013: full opt-out — the gate allows everything.
++  kOff,
++  // Series 0013: the page loads; detected images are replaced with notices
++  // renderer-side (series 0014). Nothing is blocked at the network layer.
++  kSoftBlockImages,
++};
+ 
+ // One piece of evidence about a resource. Produced by detector adapters
+ // (c2pa-rs in-process, TrustMark in-process, remote verifier); consumed here.
