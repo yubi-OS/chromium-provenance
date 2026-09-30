@@ -477,6 +477,31 @@ index 7a2fc3b5e9..ba9fe005d2 100644
  
    base::SequencedTaskRunner::GetCurrentDefault()->PostDelayedTask(
 
+diff --git a/chrome/browser/ui/views/location_bar/provenance_chip_view.cc b/chrome/browser/ui/views/location_bar/provenance_chip_view.cc
+index ba9fe005d2..005c0f6a95 100644
+--- a/chrome/browser/ui/views/location_bar/provenance_chip_view.cc
++++ b/chrome/browser/ui/views/location_bar/provenance_chip_view.cc
+@@ -1,6 +1,7 @@
+ // Copyright 2026 The yubi-OS Authors. BSD-3-Clause (matches Chromium).
+ #include "chrome/browser/ui/views/location_bar/provenance_chip_view.h"
+ 
++#include "chrome/app/vector_icons/vector_icons.h"
+ #include "base/logging.h"
+ #include "base/task/sequenced_task_runner.h"
+ #include "base/time/time.h"
+@@ -52,6 +53,11 @@ ProvenanceChipView::ProvenanceChipView()
+   // collapse animation starts at zero (icon-only width); this chip has no
+   // icon, so start fully expanded.
+   ResetAnimation(1.0);
++  // Series 0011 fixup 2: center the label (OmniboxChipButton defaults to
++  // ALIGN_LEFT) and lead with the security icon, the same glyph the
++  // chrome://settings/provenance menu entry uses.
++  SetHorizontalAlignment(gfx::ALIGN_CENTER);
++  SetIcon(kSecurityIcon);
+   SetVisible(false);
+   evidence_observer_ =
+       std::make_unique<EvidenceObserver>(weak_factory_.GetWeakPtr());
+
 diff --git a/chrome/common/pref_names.h b/chrome/common/pref_names.h
 index 03d2b7db06..553b111803 100644
 --- a/chrome/common/pref_names.h
