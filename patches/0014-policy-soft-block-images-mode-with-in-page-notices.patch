@@ -1,0 +1,411 @@
+From 65b16cd76d000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: OMNI-AGENT <foil-copy-overrate@duck.com>
+Subject: [PATCH] policy: soft-block-images mode with in-page notices (series 0014)
+
+---
+diff --git a/components/provenance_gate/browser/provenance_gate_throttle.cc b/components/provenance_gate/browser/provenance_gate_throttle.cc
+index 80b091fe7b..1be1445045 100644
+--- a/components/provenance_gate/browser/provenance_gate_throttle.cc
++++ b/components/provenance_gate/browser/provenance_gate_throttle.cc
+@@ -8,10 +8,27 @@
+ #include "components/provenance_gate/browser/provenance_evidence_store.h"
+ #include "components/provenance_gate/browser/provenance_policy_store.h"
+ #include "net/base/net_errors.h"
++#include "services/network/public/mojom/url_response_head.mojom.h"
+ #include "url/gurl.h"
+ 
+ namespace provenance_gate {
+ 
++namespace {
++// Series 0014: the soft-mode notice flow. Blocked image responses carry the
++// same block reason as full-block mode; the renderer replaces them with
++// notices (ProvenancePageTextObserver) whose Allow button re-points the
++// <img> at the bypass marker, which lands here and exempts the origin.
++constexpr char kSoftBlockReason[] = "c2pa_unverified_ai_action";
++
++bool IsImageMime(const network::mojom::URLResponseHead* response_head) {
++  if (!response_head) {
++    return false;
++  }
++  const std::string& mime = response_head->mime_type;
++  return mime.rfind("image/", 0) == 0;
++}
++}  // namespace
++
+ ProvenanceGateThrottle::ProvenanceGateThrottle(const Policy& policy)
+     : policy_(policy) {
+   // Series 0013: seed the live mode store from the switch-derived policy
+@@ -27,37 +44,50 @@ void ProvenanceGateThrottle::WillProcessResponse(
+     const GURL& response_url,
+     network::mojom::URLResponseHead* response_head,
+     bool* defer) {
+-  // Series 0008 wiring: detector results are recorded per-origin by the
+-  // page-image scanner (C2PA manifest inspection of the page's <img>
+-  // bytes); navigations to an origin with recorded evidence are evaluated
+-  // against it. Mode A blocks on the recorded evidence (overridable); Mode
+-  // B still fails closed regardless.
+   // Series 0013: consult the live mode (prefs-driven in chrome, switch in
+-  // content_shell). kOff and kSoftBlockImages allow everything at the
+-  // network layer; kSoftBlockImages enforcement is renderer-side (0014).
++  // content_shell) so runtime mode changes take effect without a restart.
+   const Mode live_mode = ProvenancePolicyStore::Get().mode();
+-  if (live_mode != Mode::kBlockOnDetect &&
+-      live_mode != Mode::kProvenanceRequired) {
++
++  // Bypass adoption runs in every blocking mode: a request carrying the
++  // marker records the origin exemption and loads.
++  const bool adopted =
++      ProvenanceBypassStore::Get().MaybeAdoptBypassRequest(response_url);
++  const bool bypassed =
++      adopted || ProvenanceBypassStore::Get().IsBypassed(response_url);
++  if (bypassed) {
++    VLOG(1) << "provenance_gate: url=" << response_url.spec()
++            << " allow=1 reason=user_bypass";
++    return;
++  }
++
++  // Series 0013: kOff allows everything.
++  if (live_mode == Mode::kOff) {
+     VLOG(1) << "provenance_gate: url=" << response_url.spec()
+-            << " allow=1 reason=mode_no_block";
++            << " allow=1 reason=mode_off";
+     return;
+   }
+ 
+-  // Series 0012: a bypass-marked navigation records the user's
+-  // proceed-anywhere choice for the origin, then loads (block-on-detect
+-  // mode only; provenance_required fails closed).
+-  if (live_mode == Mode::kBlockOnDetect) {
+-    const bool adopted =
+-        ProvenanceBypassStore::Get().MaybeAdoptBypassRequest(response_url);
+-    const bool bypassed =
+-        adopted || ProvenanceBypassStore::Get().IsBypassed(response_url);
+-    if (bypassed) {
+-      VLOG(1) << "provenance_gate: url=" << response_url.spec()
+-              << " allow=1 reason=user_bypass";
++  // Series 0014: kSoftBlockImages — documents render; image responses whose
++  // origin has recorded AI-content evidence are blocked and replaced with
++  // notices renderer-side.
++  if (live_mode == Mode::kSoftBlockImages) {
++    if (!IsImageMime(response_head)) {
++      return;
++    }
++    std::vector<Evidence> evidence =
++        ProvenanceEvidenceStore::Get().GetEvidenceForOrigin(response_url);
++    if (evidence.empty()) {
+       return;
+     }
++    VLOG(1) << "provenance_gate: url=" << response_url.spec()
++            << " evidence=" << evidence.size()
++            << " block=1 reason=" << kSoftBlockReason;
++    *defer = true;
++    delegate_->CancelWithError(net::ERR_BLOCKED_BY_CLIENT, kSoftBlockReason);
++    return;
+   }
+ 
++  // kBlockOnDetect / kProvenanceRequired: full-block evaluation.
+   std::vector<Evidence> evidence =
+       ProvenanceEvidenceStore::Get().GetEvidenceForOrigin(response_url);
+   const auto decision = Evaluate(policy_, evidence);
+@@ -66,9 +96,8 @@ void ProvenanceGateThrottle::WillProcessResponse(
+           << " allow=" << decision.allow
+           << " reason=" << decision.reason;
+ 
+-  // Series 0003: block action. content_shell shows its network error page
+-  // (ERR_BLOCKED_BY_CLIENT); the chrome interstitial with signal/source/
+-  // confidence/proceed-anyway lands as a follow-up series.
++  // Series 0003: block action. The chrome interstitial (series 0012) takes
++  // over the error page; content_shell shows its network error page.
+   if (!decision.allow) {
+     *defer = true;
+     delegate_->CancelWithError(net::ERR_BLOCKED_BY_CLIENT, decision.reason);
+diff --git a/components/provenance_gate/browser/provenance_page_text_service.h b/components/provenance_gate/browser/provenance_page_text_service.h
+index a5d0931837..f23033df6e 100644
+--- a/components/provenance_gate/browser/provenance_page_text_service.h
++++ b/components/provenance_gate/browser/provenance_page_text_service.h
+@@ -3,6 +3,7 @@
+ #define COMPONENTS_PROVENANCE_GATE_BROWSER_PROVENANCE_PAGE_TEXT_SERVICE_H_
+ 
+ #include <map>
++#include <utility>
+ #include <memory>
+ #include <string>
+ #include <vector>
+@@ -10,7 +11,10 @@
+ #include "base/logging.h"
+ #include "base/memory/raw_ptr.h"
+ #include "base/no_destructor.h"
++#include "components/provenance_gate/browser/provenance_bypass_store.h"
++#include "components/provenance_gate/browser/provenance_evidence_store.h"
+ #include "components/provenance_gate/browser/provenance_page_inspector.h"
++#include "components/provenance_gate/browser/provenance_policy_store.h"
+ #include "components/provenance_gate/policy.h"
+ #include "components/provenance_gate/public/mojom/provenance_gate.mojom.h"
+ #include "mojo/public/cpp/bindings/pending_receiver.h"
+@@ -72,6 +76,39 @@ class ProvenancePageTextImpl : public mojom::ProvenancePageText {
+     image_scanner_->Scan(GURL(frame_url), image_urls);
+   }
+ 
++  // Series 0014: soft-mode query — report which of |image_urls| the gate
++  // blocks (origin has recorded evidence, no exemption). Empty outside
++  // kSoftBlockImages mode.
++  void GetBlockedImages(
++      const std::string& frame_url,
++      const std::vector<std::string>& image_urls,
++      GetBlockedImagesCallback callback) override {
++    std::vector<std::string> blocked;
++    if (ProvenancePolicyStore::Get().mode() == Mode::kSoftBlockImages) {
++      for (const std::string& image_url_string : image_urls) {
++        const GURL image_url(image_url_string);
++        if (!image_url.is_valid() ||
++            ProvenanceBypassStore::Get().IsBypassed(image_url)) {
++          continue;
++        }
++        if (!ProvenanceEvidenceStore::Get()
++                 .GetEvidenceForOrigin(image_url)
++                 .empty()) {
++          blocked.push_back(image_url_string);
++        }
++      }
++    }
++    std::move(callback).Run(blocked);
++  }
++
++  // Series 0014 fixup: soft-mode Allow relay — the renderer observer polls
++  // for the notice's Allow clicks and relays them here; the exemption store
++  // is browser-side, and the prefs service persists it.
++  void RequestExemption(const std::string& origin_url) override {
++    ProvenanceBypassStore::Get().AddExemption(GURL(origin_url));
++    VLOG(1) << "provenance_gate: exemption requested for " << origin_url;
++  }
++
+  private:
+   raw_ptr<content::BrowserContext> browser_context_;
+   std::unique_ptr<ProvenancePageImageScanner> image_scanner_;
+diff --git a/components/provenance_gate/public/mojom/provenance_gate.mojom b/components/provenance_gate/public/mojom/provenance_gate.mojom
+index 77af7e2953..49e41abedd 100644
+--- a/components/provenance_gate/public/mojom/provenance_gate.mojom
++++ b/components/provenance_gate/public/mojom/provenance_gate.mojom
+@@ -16,4 +16,17 @@ interface ProvenancePageText {
+   // Series 0008: |image_urls| are absolute http(s) URLs of <img> elements
+   // in the frame's DOM (renderer-capped at a count guard).
+   ReportPageImages(string frame_url, array<string> image_urls);
++
++  // Series 0014: soft-mode query — the renderer asks which of |image_urls|
++  // the gate blocks (image responses whose origin has recorded evidence
++  // and no exemption). Only answered in kSoftBlockImages mode; every other
++  // mode returns an empty list.
++  GetBlockedImages(string page_url, array<string> image_urls)
++      => (array<string> blocked_urls);
++
++  // Series 0014 fixup: the soft-mode notice's Allow button asks the browser
++  // to exempt |origin_url|. Needed because renderer subresource loads
++  // (including the marker re-point) do not consult the network-layer
++  // throttle in chrome — the exemption must ride the mojo pipe.
++  RequestExemption(string origin_url);
+ };
+diff --git a/components/provenance_gate/renderer/provenance_page_text_observer.cc b/components/provenance_gate/renderer/provenance_page_text_observer.cc
+index 7750e6a39d..12e9075cf5 100644
+--- a/components/provenance_gate/renderer/provenance_page_text_observer.cc
++++ b/components/provenance_gate/renderer/provenance_page_text_observer.cc
+@@ -8,6 +8,7 @@
+ #include "base/logging.h"
+ #include "base/memory/weak_ptr.h"
+ #include "base/task/sequenced_task_runner.h"
++#include "base/time/time.h"
+ #include "content/public/renderer/render_frame.h"
+ #include "third_party/blink/public/platform/browser_interface_broker_proxy.h"
+ #include "third_party/blink/public/platform/web_string.h"
+@@ -15,6 +16,7 @@
+ #include "third_party/blink/public/web/web_element.h"
+ #include "third_party/blink/public/web/web_element_collection.h"
+ #include "third_party/blink/public/web/web_local_frame.h"
++#include "third_party/blink/public/web/web_script_source.h"
+ #include "url/gurl.h"
+ 
+ namespace provenance_gate {
+@@ -23,6 +25,19 @@ namespace {
+ // Message-size guard, not policy: the classifier floor
+ // (Policy::classifier_min_chars) is applied browser-side.
+ constexpr size_t kMaxReportedChars = 20000;
++
++// Series 0014: escape a URL for embedding in a JS double-quoted string.
++std::string JsQuoteEscape(const std::string& in) {
++  std::string out;
++  out.reserve(in.size() + 8);
++  for (const char c : in) {
++    if (c == '\\' || c == '"') {
++      out += '\\';
++    }
++    out += c;
++  }
++  return out;
++}
+ }  // namespace
+ 
+ ProvenancePageTextObserver::ProvenancePageTextObserver(
+@@ -124,7 +139,133 @@ void ProvenancePageTextObserver::WalkImages() {
+           remote_.BindNewPipeAndPassReceiver());
+     }
+     remote_->ReportPageImages(url.spec(), image_urls);
++    // Series 0014: soft mode — ask the browser which of these images the
++    // gate blocks, and swap those for notices.
++    remote_->GetBlockedImages(
++        url.spec(), image_urls,
++        base::BindOnce(&ProvenancePageTextObserver::OnBlockedImages,
++                       weak_factory_.GetWeakPtr()));
++  }
++}
++
++void ProvenancePageTextObserver::OnBlockedImages(
++    const std::vector<std::string>& blocked_urls) {
++  if (blocked_urls.empty()) {
++    return;
++  }
++  blink::WebLocalFrame* web_frame = render_frame()->GetWebFrame();
++  if (!web_frame) {
++    return;
+   }
++  // Series 0014: swap blocked images for same-size notices. The Allow
++  // button re-points the <img> at the bypass marker; the gate throttle
++  // adopts it into the exemption store and the image reloads.
++  std::string json = "[";
++  bool first = true;
++  for (const std::string& blocked_url : blocked_urls) {
++    if (!first) {
++      json += ",";
++    }
++    first = false;
++    json += "\"" + JsQuoteEscape(blocked_url) + "\"";
++  }
++  json += "]";
++  const std::string js =
++      "(function(){"
++      "var blocked=" + json + ";"
++      "var MARK='__provenance_bypass=1';"
++      "document.querySelectorAll('img').forEach(function(img){"
++      "var src=img.currentSrc||img.src||'';"
++      "if(!src)return;"
++      "var hit=null;"
++      "for(var i=0;i<blocked.length;i++){"
++      "if(src.indexOf(blocked[i])===0){hit=blocked[i];break;}}"
++      "if(!hit||img.dataset.provenanceBlocked)return;"
++      "if(!img.parentNode)return;"
++      "img.dataset.provenanceBlocked='1';"
++      "var w=img.width||320,h=img.height||150;"
++      "var d=document.createElement('div');"
++      "d.style.cssText='width:'+w+'px;height:'+h+'px;box-sizing:border-box;"
++      "display:flex;flex-direction:column;align-items:center;"
++      "justify-content:center;gap:8px;background:#0B1026;color:#e8e8ef;"
++      "border:1px solid #c52219;border-radius:6px;font-family:sans-serif;"
++      "font-size:12px;text-align:center;padding:10px;overflow:hidden;';"
++      "var t=document.createElement('div');"
++      "t.textContent='AI image blocked';"
++      "t.style.cssText='color:#ff6b5e;font-weight:700;';"
++      "var a=document.createElement('a');"
++      "a.textContent='Allow';"
++      "a.href='#';"
++      "a.style.cssText='background:#c52219;color:#fff;padding:4px 16px;"
++      "border-radius:4px;text-decoration:none;font-weight:600;"
++      "cursor:pointer;';"
++      "a.addEventListener('click',function(ev){ev.preventDefault();img.dataset.provenanceAllow='1';"
++      "var o=img.getAttribute('src')||img.src||'';"
++      "if(o.indexOf(MARK)===-1)o+=(o.indexOf('?')===-1?'?':'&')+MARK;+'&t='+Date.now();"
++      "img.onload=function(){img.style.display='';d.remove();};"
++      "img.src=o;});"
++      "d.appendChild(t);d.appendChild(a);"
++      "img.style.display='none';"
++      "img.parentNode.insertBefore(d,img);"
++      "});"
++      "})();";
++  web_frame->ExecuteScript(
++      blink::WebScriptSource(blink::WebString::FromUtf8(js)));
++  VLOG(1) << "provenance_gate: soft notices for " << blocked_urls.size()
++          << " images";
++  // Series 0014 fixup: poll for Allow clicks and relay exemptions over mojo
++  // (renderer subresource loads never consult the network throttle here).
++  allow_polls_left_ = 10;
++  base::SequencedTaskRunner::GetCurrentDefault()->PostDelayedTask(
++      FROM_HERE,
++      base::BindOnce(&ProvenancePageTextObserver::PollAllowRequests,
++                     weak_factory_.GetWeakPtr()),
++      base::Seconds(1));
++}
++
++void ProvenancePageTextObserver::PollAllowRequests() {
++  if (allow_polls_left_ <= 0) {
++    return;
++  }
++  --allow_polls_left_;
++  blink::WebLocalFrame* web_frame = render_frame()->GetWebFrame();
++  if (web_frame) {
++    blink::WebDocument document = web_frame->GetDocument();
++    if (!document.IsNull()) {
++      blink::WebElement body = document.Body();
++      if (!body.IsNull()) {
++        blink::WebElementCollection images =
++            body.GetElementsByHTMLTagName("img");
++        for (blink::WebElement element = images.FirstItem();
++             !element.IsNull(); element = images.NextItem()) {
++          blink::WebString allowed =
++              element.GetAttribute("data-provenance-allow");
++          if (allowed.IsEmpty()) {
++            continue;
++          }
++          element.SetAttribute("data-provenance-allow", "");
++          blink::WebString src_attr = element.GetAttribute("src");
++          const GURL image_url(
++              document.CompleteURL(src_attr).GetString().Utf8());
++          if (!image_url.is_valid()) {
++            continue;
++          }
++          if (!remote_.is_bound()) {
++            render_frame()->GetBrowserInterfaceBroker().GetInterface(
++                remote_.BindNewPipeAndPassReceiver());
++          }
++          remote_->RequestExemption(image_url.GetWithEmptyPath().spec());
++          VLOG(1) << "provenance_gate: allow relayed for "
++                  << image_url.spec();
++        }
++      }
++    }
++  }
++  base::SequencedTaskRunner::GetCurrentDefault()->PostDelayedTask(
++      FROM_HERE,
++      base::BindOnce(&ProvenancePageTextObserver::PollAllowRequests,
++                     weak_factory_.GetWeakPtr()),
++      base::Seconds(1));
+ }
+ 
+ void ProvenancePageTextObserver::OnDestruct() {
+diff --git a/components/provenance_gate/renderer/provenance_page_text_observer.h b/components/provenance_gate/renderer/provenance_page_text_observer.h
+index 66ad042cb7..c664aa71e4 100644
+--- a/components/provenance_gate/renderer/provenance_page_text_observer.h
++++ b/components/provenance_gate/renderer/provenance_page_text_observer.h
+@@ -2,6 +2,9 @@
+ #ifndef COMPONENTS_PROVENANCE_GATE_RENDERER_PROVENANCE_PAGE_TEXT_OBSERVER_H_
+ #define COMPONENTS_PROVENANCE_GATE_RENDERER_PROVENANCE_PAGE_TEXT_OBSERVER_H_
+ 
++#include <string>
++#include <vector>
++
+ #include "base/memory/weak_ptr.h"
+ #include "components/provenance_gate/public/mojom/provenance_gate.mojom.h"
+ #include "content/public/renderer/render_frame_observer.h"
+@@ -35,8 +38,16 @@ class ProvenancePageTextObserver : public content::RenderFrameObserver {
+   // Series 0008: runs as a posted task after DidFinishLoad unwinds.
+   void WalkImages();
+ 
++  // Series 0014: soft mode — swaps gate-blocked images for notices.
++  void OnBlockedImages(const std::vector<std::string>& blocked_urls);
++
++  // Series 0014 fixup: polls for Allow clicks (the page JS tags
++  // data-provenance-allow) and relays them over mojo.
++  void PollAllowRequests();
++
+   mojo::Remote<mojom::ProvenancePageText> remote_;
+   bool reported_ = false;
++  int allow_polls_left_ = 0;
+   base::WeakPtrFactory<ProvenancePageTextObserver> weak_factory_{this};
+ };
+ 
