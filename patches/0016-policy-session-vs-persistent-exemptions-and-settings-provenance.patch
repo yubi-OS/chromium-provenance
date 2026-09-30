@@ -699,3 +699,209 @@ index f23033df6e..8f2b3e41f7 100644
      VLOG(1) << "provenance_gate: exemption requested for " << origin_url;
    }
  
+diff --git a/chrome/browser/resources/settings/provenance_page/provenance_page.html b/chrome/browser/resources/settings/provenance_page/provenance_page.html
+index cc2a1e5a22..d40c8cd3c7 100644
+--- a/chrome/browser/resources/settings/provenance_page/provenance_page.html
++++ b/chrome/browser/resources/settings/provenance_page/provenance_page.html
+@@ -55,7 +55,7 @@
+ </div>
+ <div class="prov-section">
+   <p class="section-desc">Choose how pages with AI-generated content claims are handled.</p>
+-  <cr-radio-group selected="{{mode_}}" on-change="onModeChange_">
++  <cr-radio-group selected="{{mode_}}" on-selected-changed="onModeChanged_">
+     <cr-radio-button name="off">
+       <span>Off</span>
+       <div class="secondary">Full opt-out: nothing is detected or blocked.</div>
+diff --git a/chrome/browser/resources/settings/provenance_page/provenance_page.ts b/chrome/browser/resources/settings/provenance_page/provenance_page.ts
+index 6dc6d36c95..6d7b0dd71a 100644
+--- a/chrome/browser/resources/settings/provenance_page/provenance_page.ts
++++ b/chrome/browser/resources/settings/provenance_page/provenance_page.ts
+@@ -27,7 +27,12 @@ export class SettingsProvenancePageElement extends PolymerElement {
+ 
+   static get properties() {
+     return {
+-      mode_: {type: String, value: 'block_on_detect'},
++      // Series 0016 fixup 3: NO default value. A Polymer default here gets
++      // pushed into the radio group before the browser state arrives, the
++      // group fires selected-changed, and the handler (lastBrowserMode_
++      // still empty) sends setProvenanceMode('block_on_detect') - wiping
++      // the stored mode on every page load.
++      mode_: {type: String},
+       exemptOrigins_: {type: Array, value: () => []},
+       newOrigin_: {type: String, value: ''},
+     };
+@@ -36,11 +41,15 @@ export class SettingsProvenancePageElement extends PolymerElement {
+   declare private mode_: string;
+   declare private exemptOrigins_: string[];
+   declare private newOrigin_: string;
++  // Series 0016 fixup 2: tracks the last mode the browser reported so the
++  // selected-changed handler only sends user-initiated changes.
++  private lastBrowserMode_: string = '';
+ 
+   override connectedCallback() {
+     super.connectedCallback();
+     (window as unknown as {provenanceStateReady: unknown}).provenanceStateReady =
+         (mode: string, exemptOrigins: string) => {
++          this.lastBrowserMode_ = mode;
+           this.mode_ = mode;
+           this.exemptOrigins_ =
+               exemptOrigins ? exemptOrigins.split(',').filter(
+@@ -53,11 +62,20 @@ export class SettingsProvenancePageElement extends PolymerElement {
+     chromeSend().send('getProvenanceState');
+   }
+ 
+-  private onModeChange_(e: Event) {
+-    const mode = (e.target as unknown as {selected: string}).selected;
++  // Series 0016 fixup 2: this tree's Lit cr-radio-group never fires the DOM
++  // 'change' event; the Polymer notify event 'selected-changed' is the only
++  // signal. The lastBrowserMode_ guard skips browser-driven updates (the
++  // state callback sets mode_ too) so only user clicks reach the handler.
++  private onModeChanged_(e: Event) {
++    const detail = (e as CustomEvent).detail as {value?: string} | undefined;
++    const mode = (detail && detail.value) || this.mode_ || '';
+     if (MODES.indexOf(mode) === -1) {
+       return;
+     }
++    if (mode === this.lastBrowserMode_) {
++      return;
++    }
++    this.lastBrowserMode_ = mode;
+     chromeSend().send('setProvenanceMode', [mode]);
+   }
+ 
+diff --git a/components/provenance_gate/browser/provenance_bypass_store.cc b/components/provenance_gate/browser/provenance_bypass_store.cc
+index d8e2af89cb..768da3141c 100644
+--- a/components/provenance_gate/browser/provenance_bypass_store.cc
++++ b/components/provenance_gate/browser/provenance_bypass_store.cc
+@@ -60,6 +60,26 @@ void ProvenanceBypassStore::AddExemptionSilent(const std::string& origin_key,
+       .insert(origin_key);
+ }
+ 
++void ProvenanceBypassStore::AddPageExemption(const GURL& origin_url) {
++  if (!origin_url.is_valid()) {
++    return;
++  }
++  const std::string origin_key = url::Origin::Create(origin_url).Serialize();
++  bool added = false;
++  {
++    base::AutoLock lock(lock_);
++    added = page_origins_.insert(origin_key).second;
++  }
++  if (added) {
++    exemption_callbacks_.Notify(origin_key, /*persistent=*/false);
++  }
++}
++
++void ProvenanceBypassStore::ClearPageExemptions() {
++  base::AutoLock lock(lock_);
++  page_origins_.clear();
++}
++
+ void ProvenanceBypassStore::RemoveExemption(const std::string& origin_key) {
+   base::AutoLock lock(lock_);
+   session_origins_.erase(origin_key);
+@@ -86,7 +106,8 @@ bool ProvenanceBypassStore::IsBypassed(const GURL& url) {
+   const std::string origin_key = url::Origin::Create(url).Serialize();
+   base::AutoLock lock(lock_);
+   return session_origins_.contains(origin_key) ||
+-         persistent_origins_.contains(origin_key);
++         persistent_origins_.contains(origin_key) ||
++         page_origins_.contains(origin_key);
+ }
+ 
+ }  // namespace provenance_gate
+diff --git a/components/provenance_gate/browser/provenance_bypass_store.h b/components/provenance_gate/browser/provenance_bypass_store.h
+index 8701a6c6be..4fc6593dc1 100644
+--- a/components/provenance_gate/browser/provenance_bypass_store.h
++++ b/components/provenance_gate/browser/provenance_bypass_store.h
+@@ -37,6 +37,11 @@ class ProvenanceBypassStore {
+   // (chrome://settings/provenance) via the prefs service.
+   void AddExemption(const GURL& origin_url, bool persistent);
+   void AddExemptionSilent(const std::string& origin_key, bool persistent);
++  // Series 0016 fixup 2: PAGE-scoped exemptions come from the soft-mode
++  // Allow and reset on every main-frame navigation, so the soft block
++  // returns on refresh instead of lasting the whole session.
++  void AddPageExemption(const GURL& origin_url);
++  void ClearPageExemptions();
+   void RemoveExemption(const std::string& origin_key);
+   // Returns the PERSISTENT exemptions only (what prefs serialize).
+   std::vector<std::string> exemptions();
+@@ -53,6 +58,7 @@ class ProvenanceBypassStore {
+   base::Lock lock_;
+   std::set<std::string> session_origins_;
+   std::set<std::string> persistent_origins_;
++  std::set<std::string> page_origins_;
+   base::RepeatingCallbackList<void(const std::string&, bool)>
+       exemption_callbacks_;
+ };
+diff --git a/components/provenance_gate/browser/provenance_gate_throttle.cc b/components/provenance_gate/browser/provenance_gate_throttle.cc
+index 1be1445045..4356691994 100644
+--- a/components/provenance_gate/browser/provenance_gate_throttle.cc
++++ b/components/provenance_gate/browser/provenance_gate_throttle.cc
+@@ -5,6 +5,7 @@
+ 
+ #include "base/logging.h"
+ #include "components/provenance_gate/browser/provenance_bypass_store.h"
++#include "services/network/public/cpp/resource_request.h"
+ #include "components/provenance_gate/browser/provenance_evidence_store.h"
+ #include "components/provenance_gate/browser/provenance_policy_store.h"
+ #include "net/base/net_errors.h"
+@@ -40,6 +41,16 @@ ProvenanceGateThrottle::~ProvenanceGateThrottle() = default;
+ 
+ void ProvenanceGateThrottle::DetachFromCurrentSequence() {}
+ 
++void ProvenanceGateThrottle::WillStartRequest(
++    network::ResourceRequest* request,
++    bool* defer) {
++  // Series 0016 fixup 2: page-scoped exemptions (soft-mode Allow) reset on
++  // every main-frame navigation, so the soft block returns on refresh.
++  if (request->is_outermost_main_frame) {
++    ProvenanceBypassStore::Get().ClearPageExemptions();
++  }
++}
++
+ void ProvenanceGateThrottle::WillProcessResponse(
+     const GURL& response_url,
+     network::mojom::URLResponseHead* response_head,
+diff --git a/components/provenance_gate/browser/provenance_gate_throttle.h b/components/provenance_gate/browser/provenance_gate_throttle.h
+index 107d1aed8d..59cd8e6521 100644
+--- a/components/provenance_gate/browser/provenance_gate_throttle.h
++++ b/components/provenance_gate/browser/provenance_gate_throttle.h
+@@ -5,6 +5,10 @@
+ #include "components/provenance_gate/policy.h"
+ #include "third_party/blink/public/common/loader/url_loader_throttle.h"
+ 
++namespace network {
++class ResourceRequest;
++}  // namespace network
++
+ namespace provenance_gate {
+ 
+ // Series 0002/0003: main-frame provenance gate. Evaluates the provenance
+@@ -21,6 +25,7 @@ class ProvenanceGateThrottle : public blink::URLLoaderThrottle {
+ 
+   // blink::URLLoaderThrottle:
+   void DetachFromCurrentSequence() override;
++  void WillStartRequest(network::ResourceRequest* request, bool* defer) override;
+   void WillProcessResponse(
+       const GURL& response_url,
+       network::mojom::URLResponseHead* response_head,
+diff --git a/components/provenance_gate/browser/provenance_page_text_service.h b/components/provenance_gate/browser/provenance_page_text_service.h
+index 8f2b3e41f7..8afcf57ba4 100644
+--- a/components/provenance_gate/browser/provenance_page_text_service.h
++++ b/components/provenance_gate/browser/provenance_page_text_service.h
+@@ -105,9 +105,10 @@ class ProvenancePageTextImpl : public mojom::ProvenancePageText {
+   // for the notice's Allow clicks and relays them here; the exemption store
+   // is browser-side, and the prefs service persists it.
+   void RequestExemption(const std::string& origin_url) override {
+-    ProvenanceBypassStore::Get().AddExemption(GURL(origin_url),
+-                                              /*persistent=*/false);
+-    VLOG(1) << "provenance_gate: exemption requested for " << origin_url;
++    // Series 0016 fixup 2: the soft-mode Allow is PAGE-scoped - it resets
++    // on the next main-frame navigation, so the block returns on refresh.
++    ProvenanceBypassStore::Get().AddPageExemption(GURL(origin_url));
++    VLOG(1) << "provenance_gate: page exemption requested for " << origin_url;
+   }
+ 
+  private:
+
