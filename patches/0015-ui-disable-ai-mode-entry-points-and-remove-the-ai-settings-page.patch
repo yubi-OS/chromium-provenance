@@ -1,0 +1,48 @@
+From 3cdb934219000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: OMNI-AGENT <foil-copy-overrate@duck.com>
+Subject: [PATCH] ui: disable AI Mode entry points and remove the AI settings page (series 0015)
+
+---
+diff --git a/chrome/browser/ui/webui/settings/settings_ui.cc b/chrome/browser/ui/webui/settings/settings_ui.cc
+index 42854fe444..6a02f18cdd 100644
+--- a/chrome/browser/ui/webui/settings/settings_ui.cc
++++ b/chrome/browser/ui/webui/settings/settings_ui.cc
+@@ -652,9 +652,10 @@ SettingsUI::SettingsUI(content::WebUI* web_ui)
+   // Within the AI subpage are separate sections for Glic and for all other AI
+   // features, the visibility of these are separately controlled but we want to
+   // show the subpage if any of the AI features or Glic are enabled.
+-  html_source->AddBoolean("showAiPage", show_glic_section ||
+-                                            show_ai_features_section ||
+-                                            enable_ai_mode_search);
++  // Series 0015: yubiOS — the AI settings page is removed; the provenance
++  // gate's own settings (chrome://settings/provenance, series 0016) replace
++  // it. Forced off so the menu entry and page never appear.
++  html_source->AddBoolean("showAiPage", false);
+   html_source->AddBoolean("showAiPageAiFeatureSection",
+                           show_ai_features_section);
+ 
+@@ -896,7 +897,8 @@ void SettingsUI::UpdateShowGlicState() {
+   update.Set("showGlicSettings", show_glic);
+   update.Set("glicDisallowedByAdmin", enablement.DisallowedByAdmin());
+   if (show_glic) {
+-    update.Set("showAiPage", true);
++    // Series 0015: yubiOS — the AI settings page stays removed.
++    update.Set("showAiPage", false);
+   }
+ 
+   content::WebUIDataSource::Update(
+diff --git a/components/omnibox/browser/aim_eligibility_service.cc b/components/omnibox/browser/aim_eligibility_service.cc
+index 5e1a8533f2..157f5931b7 100644
+--- a/components/omnibox/browser/aim_eligibility_service.cc
++++ b/components/omnibox/browser/aim_eligibility_service.cc
+@@ -774,6 +774,10 @@ std::string AimEligibilityService::RequestSourceToString(RequestSource source) {
+ }
+ 
+ bool AimEligibilityService::IsEligibleByServer(bool server_eligibility) const {
++  // Series 0015: yubiOS kill switch — the provenance gate replaces AI Mode.
++  // Every eligibility check funnels through here; reporting ineligible
++  // removes the AI Mode omnibox button, popup, hint label, and NTP chips.
++  return false;
+   if (!IsAimEligible()) {
+     return false;
+   }
