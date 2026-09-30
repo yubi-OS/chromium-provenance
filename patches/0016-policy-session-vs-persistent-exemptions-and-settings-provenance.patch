@@ -1,0 +1,679 @@
+From b5ef8854cd000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: OMNI-AGENT <foil-copy-overrate@duck.com>
+Subject: [PATCH] policy: session-vs-persistent exemptions + chrome://settings/provenance (series 0016)
+
+---
+diff --git a/chrome/browser/provenance/BUILD.gn b/chrome/browser/provenance/BUILD.gn
+index 50539d29d1..61c2e84266 100644
+--- a/chrome/browser/provenance/BUILD.gn
++++ b/chrome/browser/provenance/BUILD.gn
+@@ -7,6 +7,8 @@ source_set("provenance") {
+     "provenance_prefs_service.h",
+     "provenance_prefs_service_factory.cc",
+     "provenance_prefs_service_factory.h",
++    "provenance_settings_handler.cc",
++    "provenance_settings_handler.h",
+   ]
+   deps = [
+     "//base",
+diff --git a/chrome/browser/provenance/provenance_navigation_throttle.cc b/chrome/browser/provenance/provenance_navigation_throttle.cc
+index cac44c7859..4b6d02ee5c 100644
+--- a/chrome/browser/provenance/provenance_navigation_throttle.cc
++++ b/chrome/browser/provenance/provenance_navigation_throttle.cc
+@@ -79,7 +79,7 @@ std::string BuildProvenanceInterstitialHtml(
+         "padding:10px 20px;border-radius:6px;text-decoration:none;"
+         "font-weight:600;\">Proceed anyway</a> "
+         "<span style=\"color:#8b93b8;font-size:12px;\">"
+-        "(adds this origin to the session bypass list)</span></p>",
++        "(this origin stays allowed for this session)</span></p>",
+         EscapeHTML(proceed_target).c_str());
+   }
+ 
+diff --git a/chrome/browser/provenance/provenance_prefs_service.cc b/chrome/browser/provenance/provenance_prefs_service.cc
+index 0182c2a1c2..037a12b343 100644
+--- a/chrome/browser/provenance/provenance_prefs_service.cc
++++ b/chrome/browser/provenance/provenance_prefs_service.cc
+@@ -60,7 +60,8 @@ void ProvenancePrefsService::SyncFromPrefs() {
+        base::SplitString(prefs_->GetString(prefs::kProvenanceExemptOrigins),
+                          ",", base::TRIM_WHITESPACE,
+                          base::SPLIT_WANT_NONEMPTY)) {
+-    provenance_gate::ProvenanceBypassStore::Get().AddExemptionSilent(origin);
++    provenance_gate::ProvenanceBypassStore::Get().AddExemptionSilent(
++        origin, /*persistent=*/true);
+   }
+   syncing_from_prefs_ = false;
+ }
+@@ -71,8 +72,11 @@ void ProvenancePrefsService::WriteExemptionsToPrefs() {
+       JoinOrigins(provenance_gate::ProvenanceBypassStore::Get().exemptions()));
+ }
+ 
+-void ProvenancePrefsService::OnExemptionChanged(const std::string& origin_key) {
+-  if (syncing_from_prefs_) {
++void ProvenancePrefsService::OnExemptionChanged(const std::string& origin_key,
++                                                bool persistent) {
++  // Series 0016: session bypasses (interstitial Proceed, soft-mode Allow)
++  // are in-the-moment decisions — only settings-managed exemptions persist.
++  if (syncing_from_prefs_ || !persistent) {
+     return;
+   }
+   VLOG(1) << "provenance_gate: exemption persisted " << origin_key;
+diff --git a/chrome/browser/provenance/provenance_settings_handler.cc b/chrome/browser/provenance/provenance_settings_handler.cc
+new file mode 100644
+index 0000000000..3298ff5f67
+--- /dev/null
++++ b/chrome/browser/provenance/provenance_settings_handler.cc
+@@ -0,0 +1,83 @@
++// Copyright 2026 The yubi-OS Authors. BSD-3-Clause (matches Chromium).
++#include "chrome/browser/provenance/provenance_settings_handler.h"
++
++#include <string>
++
++#include "base/logging.h"
++#include "base/strings/string_split.h"
++#include "base/values.h"
++#include "chrome/browser/profiles/profile.h"
++#include "chrome/common/pref_names.h"
++#include "components/provenance_gate/browser/provenance_bypass_store.h"
++#include "components/provenance_gate/browser/provenance_policy_store.h"
++#include "components/prefs/pref_service.h"
++#include "content/public/browser/web_ui.h"
++
++namespace provenance {
++
++void ProvenanceSettingsHandler::RegisterMessages() {
++  web_ui()->RegisterMessageCallback(
++      "getProvenanceState",
++      base::BindRepeating(&ProvenanceSettingsHandler::HandleGetState,
++                          base::Unretained(this)));
++  web_ui()->RegisterMessageCallback(
++      "setProvenanceMode",
++      base::BindRepeating(&ProvenanceSettingsHandler::HandleSetMode,
++                          base::Unretained(this)));
++  web_ui()->RegisterMessageCallback(
++      "setExemptOrigins",
++      base::BindRepeating(&ProvenanceSettingsHandler::HandleSetExemptOrigins,
++                          base::Unretained(this)));
++}
++
++void ProvenanceSettingsHandler::HandleGetState(
++    const base::ListValue& args) {
++  const std::string mode =
++      ModeToString(provenance_gate::ProvenancePolicyStore::Get().mode());
++  const auto exemptions =
++      provenance_gate::ProvenanceBypassStore::Get().exemptions();
++  std::string origins_str;
++  for (const std::string& o : exemptions) {
++    if (!origins_str.empty()) origins_str += ",";
++    origins_str += o;
++  }
++  web_ui()->CallJavascriptFunctionUnsafe("provenanceStateReady",
++                                         base::Value(mode),
++                                         base::Value(origins_str));
++}
++
++void ProvenanceSettingsHandler::HandleSetMode(
++    const base::ListValue& args) {
++  std::string mode_str;
++  for (const auto& v : args) {
++    if (v.is_string()) { mode_str = v.GetString(); break; }
++  }
++  if (mode_str.empty()) return;
++  provenance_gate::Mode mode = provenance_gate::Mode::kBlockOnDetect;
++  provenance_gate::ModeFromString(mode_str, &mode);
++  provenance_gate::ProvenancePolicyStore::Get().SetMode(mode);
++  Profile* profile = Profile::FromWebUI(web_ui());
++  profile->GetPrefs()->SetString(prefs::kProvenanceMode, mode_str);
++  VLOG(1) << "provenance_gate: settings mode=" << mode_str;
++}
++
++void ProvenanceSettingsHandler::HandleSetExemptOrigins(
++    const base::ListValue& args) {
++  std::string origins_str;
++  for (const auto& v : args) {
++    if (v.is_string()) { origins_str = v.GetString(); break; }
++  }
++  if (origins_str.empty()) return;
++  Profile* profile = Profile::FromWebUI(web_ui());
++  profile->GetPrefs()->SetString(prefs::kProvenanceExemptOrigins,
++                                 origins_str);
++  for (const std::string& origin :
++       base::SplitString(origins_str, ",", base::TRIM_WHITESPACE,
++                         base::SPLIT_WANT_NONEMPTY)) {
++    provenance_gate::ProvenanceBypassStore::Get().AddExemptionSilent(
++        origin, /*persistent=*/true);
++  }
++  VLOG(1) << "provenance_gate: settings exempt_origins=" << origins_str;
++}
++
++}  // namespace provenance
+diff --git a/chrome/browser/provenance/provenance_settings_handler.h b/chrome/browser/provenance/provenance_settings_handler.h
+new file mode 100644
+index 0000000000..5672e23185
+--- /dev/null
++++ b/chrome/browser/provenance/provenance_settings_handler.h
+@@ -0,0 +1,24 @@
++// Copyright 2026 The yubi-OS Authors. BSD-3-Clause (matches Chromium).
++#ifndef CHROME_BROWSER_PROVENANCE_PROVENANCE_SETTINGS_HANDLER_H_
++#define CHROME_BROWSER_PROVENANCE_PROVENANCE_SETTINGS_HANDLER_H_
++
++#include "base/values.h"
++#include "content/public/browser/web_ui_message_handler.h"
++
++namespace provenance {
++
++class ProvenanceSettingsHandler : public content::WebUIMessageHandler {
++ public:
++  ProvenanceSettingsHandler() = default;
++  ~ProvenanceSettingsHandler() override = default;
++  void RegisterMessages() override;
++
++ private:
++  void HandleGetState(const base::ListValue& args);
++  void HandleSetMode(const base::ListValue& args);
++  void HandleSetExemptOrigins(const base::ListValue& args);
++};
++
++}  // namespace provenance
++
++#endif
+diff --git a/chrome/browser/resources/settings/BUILD.gn b/chrome/browser/resources/settings/BUILD.gn
+index 976b9be21f..bb2fa57a1b 100644
+--- a/chrome/browser/resources/settings/BUILD.gn
++++ b/chrome/browser/resources/settings/BUILD.gn
+@@ -64,6 +64,7 @@ build_webui("build") {
+     "ai_page/inline_cue_menu_page.ts",
+     "ai_page/offer_writing_help_page.ts",
+     "ai_page/skills_page.ts",
++    "provenance_page/provenance_page.ts",
+     "autofill_page/account_card.ts",
+     "autofill_page/autofill_ai_add_or_edit_dialog.ts",
+     "autofill_page/autofill_ai_entries_list.ts",
+diff --git a/chrome/browser/resources/settings/provenance_page/provenance_page.html b/chrome/browser/resources/settings/provenance_page/provenance_page.html
+new file mode 100644
+index 0000000000..e70f6e1522
+--- /dev/null
++++ b/chrome/browser/resources/settings/provenance_page/provenance_page.html
+@@ -0,0 +1,84 @@
++<style include="settings-shared">
++  .prov-mode {
++    display: flex;
++    flex-direction: column;
++    padding: 12px 16px;
++    cursor: pointer;
++    border: 1px solid var(--cr-border-color, #ccc);
++    border-radius: 6px;
++    margin-bottom: 8px;
++  }
++
++  .prov-mode[selected] {
++    border-color: #c52219;
++    background: rgba(197, 34, 25, 0.06);
++  }
++
++  .prov-mode .title {
++    font-weight: 600;
++  }
++
++  .prov-mode .secondary {
++    color: var(--cr-secondary-text-color, #666);
++    font-size: 12px;
++  }
++
++  .prov-exempt-row {
++    display: flex;
++    align-items: center;
++    justify-content: space-between;
++    padding: 6px 0;
++  }
++
++  .prov-exempt-row span {
++    font-family: monospace;
++    font-size: 12px;
++  }
++
++  .prov-add-row {
++    display: flex;
++    gap: 8px;
++    margin-top: 8px;
++  }
++
++  .prov-add-row input {
++    flex: 1;
++  }
++</style>
++<div class="settings-box first">
++  <h2>Provenance gate</h2>
++</div>
++<div class="settings-box">
++  <p>Choose how pages with AI-generated content claims are handled.</p>
++  <div class="prov-mode" data-mode="off" selected$="[[isMode_('off')]]"
++      on-click="onModeClick_">
++    <div class="title">Off</div>
++    <div class="secondary">Full opt-out: nothing is detected or blocked.</div>
++  </div>
++  <div class="prov-mode" data-mode="soft_block_images"
++      selected$="[[isMode_('soft_block_images')]]" on-click="onModeClick_">
++    <div class="title">Soft block</div>
++    <div class="secondary">Pages render; images with AI-content claims are
++      replaced with notices (each with its own allow option).</div>
++  </div>
++  <div class="prov-mode" data-mode="block_on_detect"
++      selected$="[[isMode_('block_on_detect')]]" on-click="onModeClick_">
++    <div class="title">Full block</div>
++    <div class="secondary">Pages with AI-generated content are blocked with an
++      interstitial; you can proceed for the current session.</div>
++  </div>
++</div>
++<div class="settings-box">
++  <h2>Exempt sites</h2>
++  <p>Sites on this list are never blocked by the provenance gate.</p>
++  <template is="dom-repeat" items="[[exemptOrigins_]]">
++    <div class="prov-exempt-row">
++      <span>[[item]]</span>
++      <button data-origin$="[[item]]" on-click="onRemoveClick_">Remove</button>
++    </div>
++  </template>
++  <div class="prov-add-row">
++    <input value="{{newOrigin_::input}}" placeholder="example.com">
++    <button on-click="onAdd_">Add</button>
++  </div>
++</div>
+diff --git a/chrome/browser/resources/settings/provenance_page/provenance_page.ts b/chrome/browser/resources/settings/provenance_page/provenance_page.ts
+new file mode 100644
+index 0000000000..4d26a3bd49
+--- /dev/null
++++ b/chrome/browser/resources/settings/provenance_page/provenance_page.ts
+@@ -0,0 +1,95 @@
++// Copyright 2026 The yubi-OS Authors. BSD-3-Clause (matches Chromium).
++import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
++import {getTemplate} from './provenance_page.html.js';
++
++interface ChromeSend {
++  send(name: string, args?: unknown[]): void;
++}
++
++function chromeSend(): ChromeSend {
++  return (window as unknown as {chrome: ChromeSend}).chrome;
++}
++
++const MODES: string[] = ['off', 'soft_block_images', 'block_on_detect'];
++
++export class SettingsProvenancePageElement extends PolymerElement {
++  static get is() {
++    return 'settings-provenance-page';
++  }
++
++  static get template() {
++    return getTemplate();
++  }
++
++  static get properties() {
++    return {
++      mode_: {type: String, value: 'block_on_detect'},
++      exemptOrigins_: {type: Array, value: () => []},
++      newOrigin_: {type: String, value: ''},
++    };
++  }
++
++  declare private mode_: string;
++  declare private exemptOrigins_: string[];
++  declare private newOrigin_: string;
++
++  override connectedCallback() {
++    super.connectedCallback();
++    (window as unknown as {provenanceStateReady: unknown}).provenanceStateReady =
++        (state: {mode: string, exemptOrigins: string}) => {
++          this.mode_ = state.mode;
++          this.exemptOrigins_ =
++              state.exemptOrigins ? state.exemptOrigins.split(',').filter(
++                  (o: string) => o.length > 0) : [];
++        };
++    this.refresh_();
++  }
++
++  private refresh_() {
++    chromeSend().send('getProvenanceState');
++  }
++
++  private isMode_(mode: string): boolean {
++    return this.mode_ === mode;
++  }
++
++  private onModeClick_(e: Event) {
++    const mode = (e.currentTarget as HTMLElement).dataset['mode'] || '';
++    if (MODES.indexOf(mode) === -1) {
++      return;
++    }
++    this.mode_ = mode;
++    chromeSend().send('setProvenanceMode', [mode]);
++  }
++
++  private onAdd_() {
++    const origin = (this.newOrigin_ || '').trim().replace(/\/$/, '');
++    if (!origin) {
++      return;
++    }
++    const current = this.exemptOrigins_ || [];
++    if (current.indexOf(origin) === -1) {
++      current.push(origin);
++    }
++    chromeSend().send('setExemptOrigins', [current.join(',')]);
++    this.newOrigin_ = '';
++  }
++
++  private onRemoveClick_(e: Event) {
++    const origin = (e.currentTarget as HTMLElement).dataset['origin'] || '';
++    if (!origin) {
++      return;
++    }
++    const kept = (this.exemptOrigins_ || []).filter((o: string) => o !== origin);
++    chromeSend().send('setExemptOrigins', [kept.join(',')]);
++  }
++}
++
++declare global {
++  interface HTMLElementTagNameMap {
++    'settings-provenance-page': SettingsProvenancePageElement,
++  }
++}
++
++customElements.define(
++    SettingsProvenancePageElement.is, SettingsProvenancePageElement);
+diff --git a/chrome/browser/resources/settings/route.ts b/chrome/browser/resources/settings/route.ts
+index 2aaa938c7e..28f4e12776 100644
+--- a/chrome/browser/resources/settings/route.ts
++++ b/chrome/browser/resources/settings/route.ts
+@@ -206,6 +206,12 @@ function createRoutes(): SettingsRoutes {
+     }
+   }
+ 
++  // Series 0016: the provenance gate's settings page.
++  if (loadTimeData.getBoolean('showProvenancePage')) {
++    r.PROVENANCE =
++        r.BASIC.createSection('/provenance', 'provenance', 'Provenance');
++  }
++
+   if (visibility.appearance !== false) {
+     r.APPEARANCE = r.BASIC.createSection(
+         '/appearance', 'appearance',
+diff --git a/chrome/browser/resources/settings/settings_main/settings_main.html b/chrome/browser/resources/settings/settings_main/settings_main.html
+index 7b00df716c..995d98a82c 100644
+--- a/chrome/browser/resources/settings/settings_main/settings_main.html
++++ b/chrome/browser/resources/settings/settings_main/settings_main.html
+@@ -109,6 +109,16 @@
+     </div>
+   </template>
+ 
++  <template is="dom-if" if="[[showProvenancePage_]]">
++    <div slot="view" id="provenance">
++      <template is="dom-if" if="[[renderPlugin_(
++          routes_.PROVENANCE, lastRoute_, inSearchMode_)]]">
++        <settings-provenance-page prefs="{{prefs}}">
++        </settings-provenance-page>
++      </template>
++    </div>
++  </template>
++
+   <template is="dom-if" if="[[showPage_(pageVisibility_.appearance)]]">
+     <div slot="view" id="appearance">
+       <template is="dom-if" if="[[renderPlugin_(
+diff --git a/chrome/browser/resources/settings/settings_main/settings_main.ts b/chrome/browser/resources/settings/settings_main/settings_main.ts
+index a0b80ace90..5c6f511369 100644
+--- a/chrome/browser/resources/settings/settings_main/settings_main.ts
++++ b/chrome/browser/resources/settings/settings_main/settings_main.ts
+@@ -12,6 +12,7 @@ import 'chrome://resources/cr_elements/cr_view_manager/cr_view_manager.js';
+ import 'chrome://resources/cr_elements/icons.html.js';
+ import '../about_page/about_page.js';
+ import '../ai_page/ai_page_index.js';
++import '../provenance_page/provenance_page.js';
+ import '../appearance_page/appearance_page_index.js';
+ import '../autofill_page/autofill_page_index.js';
+ import '../on_startup_page/on_startup_page.js';
+@@ -278,6 +279,11 @@ export class SettingsMainElement extends SettingsMainElementBase {
+     return loadTimeData.getBoolean('showAiPage') && this.showPage_(visibility);
+   }
+ 
++  // Series 0016: the provenance gate's settings page.
++  private showProvenancePage_(): boolean {
++    return loadTimeData.getBoolean('showProvenancePage');
++  }
++
+   private showManagedHeader_(): boolean {
+     return !this.inSearchMode_ && !!this.lastRoute_ &&
+         this.lastRoute_ !== routes.ABOUT && !this.lastRoute_.isSubpage();
+diff --git a/chrome/browser/resources/settings/settings_menu/settings_menu.html b/chrome/browser/resources/settings/settings_menu/settings_menu.html
+index efde1c73df..d58bd6d0b4 100644
+--- a/chrome/browser/resources/settings/settings_menu/settings_menu.html
++++ b/chrome/browser/resources/settings/settings_menu/settings_menu.html
+@@ -86,6 +86,13 @@
+           $i18n{aiPageTitle}
+           <cr-ripple></cr-ripple>
+         </a>
++        <a role="menuitem" id="provenance" href="/provenance"
++            hidden="[[!showProvenancePage_]]"
++            class="cr-nav-menu-item">
++          <cr-icon icon="settings:security"></cr-icon>
++          Provenance
++          <cr-ripple></cr-ripple>
++        </a>
+         <a role="menuitem" id="appearance" href="/appearance"
+             hidden="[[!pageVisibility_.appearance]]"
+             class="cr-nav-menu-item">
+diff --git a/chrome/browser/resources/settings/settings_menu/settings_menu.ts b/chrome/browser/resources/settings/settings_menu/settings_menu.ts
+index 564554a675..0ffc1d2adf 100644
+--- a/chrome/browser/resources/settings/settings_menu/settings_menu.ts
++++ b/chrome/browser/resources/settings/settings_menu/settings_menu.ts
+@@ -87,11 +87,16 @@ export class SettingsMenuElement extends SettingsMenuElementBase {
+         type: Boolean,
+         value: () => loadTimeData.getBoolean('showAiPage'),
+       },
++      showProvenancePage_: {
++        type: Boolean,
++        value: () => loadTimeData.getBoolean('showProvenancePage'),
++      },
+     };
+   }
+ 
+   declare private pageVisibility_?: PageVisibility;
+   declare private showAiPage_: boolean;
++  declare private showProvenancePage_: boolean;
+   private metricsBrowserProxy_: MetricsBrowserProxy =
+       MetricsBrowserProxyImpl.getInstance();
+ 
+diff --git a/chrome/browser/ui/webui/settings/settings_ui.cc b/chrome/browser/ui/webui/settings/settings_ui.cc
+index 6a02f18cdd..d02b0a3840 100644
+--- a/chrome/browser/ui/webui/settings/settings_ui.cc
++++ b/chrome/browser/ui/webui/settings/settings_ui.cc
+@@ -61,6 +61,7 @@
+ #include "chrome/browser/ui/webui/metrics_handler.h"
+ #include "chrome/browser/ui/webui/plural_string_handler.h"
+ #include "chrome/browser/ui/webui/sanitized_image/sanitized_image_source.h"
++#include "chrome/browser/provenance/provenance_settings_handler.h"
+ #include "chrome/browser/ui/webui/settings/about_handler.h"
+ #include "chrome/browser/ui/webui/settings/accessibility_main_handler.h"
+ #include "chrome/browser/ui/webui/settings/appearance_handler.h"
+@@ -242,6 +243,8 @@ SettingsUI::SettingsUI(content::WebUI* web_ui)
+       "worker-src blob: chrome://resources 'self';");
+ 
+   AddSettingsPageUIHandler(std::make_unique<AppearanceHandler>(web_ui));
++  AddSettingsPageUIHandler(
++      std::make_unique<provenance::ProvenanceSettingsHandler>());
+ 
+ #if BUILDFLAG(IS_CHROMEOS)
+   AddSettingsPageUIHandler(std::make_unique<LanguagesHandler>(profile));
+@@ -656,6 +659,8 @@ SettingsUI::SettingsUI(content::WebUI* web_ui)
+   // gate's own settings (chrome://settings/provenance, series 0016) replace
+   // it. Forced off so the menu entry and page never appear.
+   html_source->AddBoolean("showAiPage", false);
++  // Series 0016: the provenance gate's own settings page.
++  html_source->AddBoolean("showProvenancePage", true);
+   html_source->AddBoolean("showAiPageAiFeatureSection",
+                           show_ai_features_section);
+ 
+@@ -727,7 +732,7 @@ void SettingsUI::InitBrowserSettingsWebUIHandlers() {
+             profile->GetPath().value());
+     DCHECK(account_manager_facade);
+ 
+-    web_ui()->AddMessageHandler(
++    AddSettingsPageUIHandler(
+         std::make_unique<ash::settings::AccountManagerUIHandler>(
+             account_manager, account_manager_facade,
+             IdentityManagerFactory::GetForProfile(profile),
+@@ -740,7 +745,7 @@ void SettingsUI::InitBrowserSettingsWebUIHandlers() {
+     ash::eche_app::EcheAppManager* eche_app_manager =
+         ash::eche_app::EcheAppManagerFactory::GetForProfile(profile);
+ 
+-    web_ui()->AddMessageHandler(std::make_unique<
++    AddSettingsPageUIHandler(std::make_unique<
+                                 ash::settings::MultideviceHandler>(
+         profile->GetPrefs(),
+         ash::multidevice_setup::MultiDeviceSetupClientFactory::GetForProfile(
+@@ -797,7 +802,7 @@ void SettingsUI::BindInterface(
+ void SettingsUI::AddSettingsPageUIHandler(
+     std::unique_ptr<content::WebUIMessageHandler> handler) {
+   DCHECK(handler);
+-  web_ui()->AddMessageHandler(std::move(handler));
++  AddSettingsPageUIHandler(std::move(handler));
+ }
+ 
+ void SettingsUI::TryShowHatsSurveyWithTimeout() {
+diff --git a/components/provenance_gate/browser/provenance_bypass_store.cc b/components/provenance_gate/browser/provenance_bypass_store.cc
+index 956523f0a2..d8e2af89cb 100644
+--- a/components/provenance_gate/browser/provenance_bypass_store.cc
++++ b/components/provenance_gate/browser/provenance_bypass_store.cc
+@@ -26,48 +26,56 @@ bool ProvenanceBypassStore::MaybeAdoptBypassRequest(const GURL& url) {
+   replacements.ClearQuery();
+   const std::string origin_key =
+       url::Origin::Create(url.ReplaceComponents(replacements)).Serialize();
+-  AddOriginKey(origin_key);
++  AddOriginKey(origin_key, /*persistent=*/false);
+   return true;
+ }
+ 
+-void ProvenanceBypassStore::AddOriginKey(const std::string& origin_key) {
++void ProvenanceBypassStore::AddOriginKey(const std::string& origin_key,
++                                         bool persistent) {
+   bool added = false;
+   {
+     base::AutoLock lock(lock_);
+-    added = bypassed_origins_.insert(origin_key).second;
++    added = (persistent ? persistent_origins_ : session_origins_)
++                .insert(origin_key)
++                .second;
+   }
+   if (added) {
+     // Notify outside the lock; the chrome prefs service writes through.
+-    exemption_callbacks_.Notify(origin_key);
++    exemption_callbacks_.Notify(origin_key, persistent);
+   }
+ }
+ 
+-void ProvenanceBypassStore::AddExemption(const GURL& origin_url) {
++void ProvenanceBypassStore::AddExemption(const GURL& origin_url,
++                                         bool persistent) {
+   if (!origin_url.is_valid()) {
+     return;
+   }
+-  AddOriginKey(url::Origin::Create(origin_url).Serialize());
++  AddOriginKey(url::Origin::Create(origin_url).Serialize(), persistent);
+ }
+ 
+-void ProvenanceBypassStore::AddExemptionSilent(const std::string& origin_key) {
++void ProvenanceBypassStore::AddExemptionSilent(const std::string& origin_key,
++                                               bool persistent) {
+   base::AutoLock lock(lock_);
+-  bypassed_origins_.insert(origin_key);
++  (persistent ? persistent_origins_ : session_origins_)
++      .insert(origin_key);
+ }
+ 
+ void ProvenanceBypassStore::RemoveExemption(const std::string& origin_key) {
+   base::AutoLock lock(lock_);
+-  bypassed_origins_.erase(origin_key);
++  session_origins_.erase(origin_key);
++  persistent_origins_.erase(origin_key);
+ }
+ 
+ std::vector<std::string> ProvenanceBypassStore::exemptions() {
+   base::AutoLock lock(lock_);
+-  return std::vector<std::string>(bypassed_origins_.begin(),
+-                                  bypassed_origins_.end());
++  return std::vector<std::string>(persistent_origins_.begin(),
++                                  persistent_origins_.end());
+ }
+ 
+ base::CallbackListSubscription
+ ProvenanceBypassStore::AddExemptionChangedCallback(
+-    base::RepeatingCallback<void(const std::string& origin_key)> cb) {
++    base::RepeatingCallback<void(const std::string& origin_key,
++                                 bool persistent)> cb) {
+   return exemption_callbacks_.Add(std::move(cb));
+ }
+ 
+@@ -77,7 +85,8 @@ bool ProvenanceBypassStore::IsBypassed(const GURL& url) {
+   }
+   const std::string origin_key = url::Origin::Create(url).Serialize();
+   base::AutoLock lock(lock_);
+-  return bypassed_origins_.contains(origin_key);
++  return session_origins_.contains(origin_key) ||
++         persistent_origins_.contains(origin_key);
+ }
+ 
+ }  // namespace provenance_gate
+diff --git a/components/provenance_gate/browser/provenance_bypass_store.h b/components/provenance_gate/browser/provenance_bypass_store.h
+index 7f0bc19807..8701a6c6be 100644
+--- a/components/provenance_gate/browser/provenance_bypass_store.h
++++ b/components/provenance_gate/browser/provenance_bypass_store.h
+@@ -31,25 +31,29 @@ class ProvenanceBypassStore {
+ 
+   bool IsBypassed(const GURL& url);
+ 
+-  // Series 0013: exemption surface. AddExemption notifies the exemption
+-  // callbacks (the chrome prefs service writes through to prefs);
+-  // AddExemptionSilent is for bulk loads from prefs.
+-  void AddExemption(const GURL& origin_url);
+-  void AddExemptionSilent(const std::string& origin_key);
++  // Series 0016: two exemption classes. SESSION bypasses come from the
++  // interstitial Proceed and the soft-mode Allow (in-the-moment decisions,
++  // lost on restart). PERSISTENT exemptions come only from the settings UI
++  // (chrome://settings/provenance) via the prefs service.
++  void AddExemption(const GURL& origin_url, bool persistent);
++  void AddExemptionSilent(const std::string& origin_key, bool persistent);
+   void RemoveExemption(const std::string& origin_key);
++  // Returns the PERSISTENT exemptions only (what prefs serialize).
+   std::vector<std::string> exemptions();
+   base::CallbackListSubscription AddExemptionChangedCallback(
+-      base::RepeatingCallback<void(const std::string& origin_key)> cb);
++      base::RepeatingCallback<void(const std::string& origin_key,
++                                   bool persistent)> cb);
+ 
+  private:
+   friend class base::NoDestructor<ProvenanceBypassStore>;
+   ProvenanceBypassStore() = default;
+ 
+-  void AddOriginKey(const std::string& origin_key);
++  void AddOriginKey(const std::string& origin_key, bool persistent);
+ 
+   base::Lock lock_;
+-  std::set<std::string> bypassed_origins_;
+-  base::RepeatingCallbackList<void(const std::string&)>
++  std::set<std::string> session_origins_;
++  std::set<std::string> persistent_origins_;
++  base::RepeatingCallbackList<void(const std::string&, bool)>
+       exemption_callbacks_;
+ };
+ 
+diff --git a/components/provenance_gate/browser/provenance_page_text_service.h b/components/provenance_gate/browser/provenance_page_text_service.h
+index f23033df6e..8f2b3e41f7 100644
+--- a/components/provenance_gate/browser/provenance_page_text_service.h
++++ b/components/provenance_gate/browser/provenance_page_text_service.h
+@@ -105,7 +105,8 @@ class ProvenancePageTextImpl : public mojom::ProvenancePageText {
+   // for the notice's Allow clicks and relays them here; the exemption store
+   // is browser-side, and the prefs service persists it.
+   void RequestExemption(const std::string& origin_url) override {
+-    ProvenanceBypassStore::Get().AddExemption(GURL(origin_url));
++    ProvenanceBypassStore::Get().AddExemption(GURL(origin_url),
++                                              /*persistent=*/false);
+     VLOG(1) << "provenance_gate: exemption requested for " << origin_url;
+   }
+ 
