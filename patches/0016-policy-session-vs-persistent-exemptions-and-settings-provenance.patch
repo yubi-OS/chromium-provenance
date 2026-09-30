@@ -1,4 +1,4 @@
-From 70d59a6da9000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From 8040c7e0ee000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: OMNI-AGENT <foil-copy-overrate@duck.com>
 Subject: [PATCH] policy: session-vs-persistent exemptions + chrome://settings/provenance (series 0016)
 
@@ -203,10 +203,10 @@ index 976b9be21f..bb2fa57a1b 100644
      "autofill_page/autofill_ai_entries_list.ts",
 diff --git a/chrome/browser/resources/settings/provenance_page/provenance_page.html b/chrome/browser/resources/settings/provenance_page/provenance_page.html
 new file mode 100644
-index 0000000000..9ae70986bf
+index 0000000000..cc2a1e5a22
 --- /dev/null
 +++ b/chrome/browser/resources/settings/provenance_page/provenance_page.html
-@@ -0,0 +1,90 @@
+@@ -0,0 +1,91 @@
 +<style include="settings-shared">
 +  .prov-section {
 +    padding: 0 24px 12px;
@@ -249,6 +249,7 @@ index 0000000000..9ae70986bf
 +  }
 +
 +  .prov-add-row {
++    align-items: flex-start;
 +    display: flex;
 +    gap: 12px;
 +    margin-top: 12px;
@@ -293,7 +294,7 @@ index 0000000000..9ae70986bf
 +  </template>
 +  <div class="prov-empty" hidden$="[[exemptOrigins_.length]]">No sites are exempt.</div>
 +  <div class="prov-add-row">
-+    <cr-input label="Add a site" placeholder="example.com" value="{{newOrigin_}}"></cr-input>
++    <cr-input aria-label="Add a site" placeholder="example.com" value="{{newOrigin_}}"></cr-input>
 +    <cr-button class="prov-add" on-click="onAdd_">Add</cr-button>
 +  </div>
 +</div>
