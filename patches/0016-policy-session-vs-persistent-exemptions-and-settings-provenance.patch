@@ -1,4 +1,4 @@
-From b5ef8854cd000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From 730103a1e4000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: OMNI-AGENT <foil-copy-overrate@duck.com>
 Subject: [PATCH] policy: session-vs-persistent exemptions + chrome://settings/provenance (series 0016)
 
@@ -57,6 +57,19 @@ index 0182c2a1c2..037a12b343 100644
      return;
    }
    VLOG(1) << "provenance_gate: exemption persisted " << origin_key;
+diff --git a/chrome/browser/provenance/provenance_prefs_service.h b/chrome/browser/provenance/provenance_prefs_service.h
+index 0a43d08bbb..2ef9d1551f 100644
+--- a/chrome/browser/provenance/provenance_prefs_service.h
++++ b/chrome/browser/provenance/provenance_prefs_service.h
+@@ -29,7 +29,7 @@ class ProvenancePrefsService : public KeyedService {
+  private:
+   void SyncFromPrefs();
+   void WriteExemptionsToPrefs();
+-  void OnExemptionChanged(const std::string& origin_key);
++  void OnExemptionChanged(const std::string& origin_key, bool persistent);
+ 
+   raw_ptr<PrefService> prefs_;
+   PrefChangeRegistrar pref_change_registrar_;
 diff --git a/chrome/browser/provenance/provenance_settings_handler.cc b/chrome/browser/provenance/provenance_settings_handler.cc
 new file mode 100644
 index 0000000000..3298ff5f67
@@ -396,6 +409,18 @@ index 2aaa938c7e..28f4e12776 100644
    if (visibility.appearance !== false) {
      r.APPEARANCE = r.BASIC.createSection(
          '/appearance', 'appearance',
+diff --git a/chrome/browser/resources/settings/router.ts b/chrome/browser/resources/settings/router.ts
+index a6b043271a..f833fbdbba 100644
+--- a/chrome/browser/resources/settings/router.ts
++++ b/chrome/browser/resources/settings/router.ts
+@@ -14,6 +14,7 @@ import {loadTimeData} from './i18n_setup.js';
+  * Specifies all possible routes in settings.
+  */
+ export interface SettingsRoutes {
++  PROVENANCE?: Route;
+   ABOUT: Route;
+   ACCESSIBILITY: Route;
+   ADDRESSES: Route;
 diff --git a/chrome/browser/resources/settings/settings_main/settings_main.html b/chrome/browser/resources/settings/settings_main/settings_main.html
 index 7b00df716c..995d98a82c 100644
 --- a/chrome/browser/resources/settings/settings_main/settings_main.html
@@ -481,7 +506,7 @@ index 564554a675..0ffc1d2adf 100644
        MetricsBrowserProxyImpl.getInstance();
  
 diff --git a/chrome/browser/ui/webui/settings/settings_ui.cc b/chrome/browser/ui/webui/settings/settings_ui.cc
-index 6a02f18cdd..d02b0a3840 100644
+index 6a02f18cdd..91f14e0220 100644
 --- a/chrome/browser/ui/webui/settings/settings_ui.cc
 +++ b/chrome/browser/ui/webui/settings/settings_ui.cc
 @@ -61,6 +61,7 @@
@@ -528,15 +553,6 @@ index 6a02f18cdd..d02b0a3840 100644
                                  ash::settings::MultideviceHandler>(
          profile->GetPrefs(),
          ash::multidevice_setup::MultiDeviceSetupClientFactory::GetForProfile(
-@@ -797,7 +802,7 @@ void SettingsUI::BindInterface(
- void SettingsUI::AddSettingsPageUIHandler(
-     std::unique_ptr<content::WebUIMessageHandler> handler) {
-   DCHECK(handler);
--  web_ui()->AddMessageHandler(std::move(handler));
-+  AddSettingsPageUIHandler(std::move(handler));
- }
- 
- void SettingsUI::TryShowHatsSurveyWithTimeout() {
 diff --git a/components/provenance_gate/browser/provenance_bypass_store.cc b/components/provenance_gate/browser/provenance_bypass_store.cc
 index 956523f0a2..d8e2af89cb 100644
 --- a/components/provenance_gate/browser/provenance_bypass_store.cc
