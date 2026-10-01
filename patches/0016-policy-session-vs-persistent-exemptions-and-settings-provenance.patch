@@ -904,4 +904,130 @@ index 8f2b3e41f7..8afcf57ba4 100644
    }
  
   private:
-
+diff --git a/components/provenance_gate/browser/provenance_evidence_store.cc b/components/provenance_gate/browser/provenance_evidence_store.cc
+index bcd5d1d723..b8b6f00107 100644
+--- a/components/provenance_gate/browser/provenance_evidence_store.cc
++++ b/components/provenance_gate/browser/provenance_evidence_store.cc
+@@ -45,4 +45,21 @@ std::vector<Evidence> ProvenanceEvidenceStore::GetEvidenceForOrigin(
+   return it->second;
+ }
+ 
++void ProvenanceEvidenceStore::RecordImageEvidence(
++    const GURL& image_url,
++    Evidence evidence) {
++  const std::string key = image_url.spec();
++  {
++    base::AutoLock lock(lock_);
++    evidence_by_image_url_[key].push_back(std::move(evidence));
++  }
++}
++
++bool ProvenanceEvidenceStore::HasEvidenceForImageUrl(
++    const GURL& image_url) {
++  const std::string key = image_url.spec();
++  base::AutoLock lock(lock_);
++  return evidence_by_image_url_.contains(key);
++}
++
+ }  // namespace provenance_gate
+diff --git a/components/provenance_gate/browser/provenance_evidence_store.h b/components/provenance_gate/browser/provenance_evidence_store.h
+index c80fb924b4..80346250c9 100644
+--- a/components/provenance_gate/browser/provenance_evidence_store.h
++++ b/components/provenance_gate/browser/provenance_evidence_store.h
+@@ -39,6 +39,10 @@ class ProvenanceEvidenceStore {
+ 
+   void RecordEvidence(const GURL& page_origin, Evidence evidence);
+   std::vector<Evidence> GetEvidenceForOrigin(const GURL& url);
++  // Series 0016 fixup 5: per-image-URL evidence so soft-mode notices only
++  // hit the specific AI-tagged images, not every image from the origin.
++  void RecordImageEvidence(const GURL& image_url, Evidence evidence);
++  bool HasEvidenceForImageUrl(const GURL& image_url);
+ 
+  private:
+   friend class base::NoDestructor<ProvenanceEvidenceStore>;
+@@ -46,6 +50,7 @@ class ProvenanceEvidenceStore {
+ 
+   base::Lock lock_;
+   std::map<std::string, std::vector<Evidence>> evidence_by_origin_;
++  std::map<std::string, std::vector<Evidence>> evidence_by_image_url_;
+   base::ObserverList<Observer> observers_;
+ };
+ 
+diff --git a/components/provenance_gate/browser/provenance_page_inspector.cc b/components/provenance_gate/browser/provenance_page_inspector.cc
+index 9fc2bc46b6..4f62ea3e68 100644
+--- a/components/provenance_gate/browser/provenance_page_inspector.cc
++++ b/components/provenance_gate/browser/provenance_page_inspector.cc
+@@ -101,9 +101,14 @@ void ProvenancePageImageScanner::OnImageInspected(
+   evidence.confidence = 1.0;
+   evidence.source = "c2pa";
+   ProvenanceEvidenceStore::Get().RecordEvidence(page_origin,
+-                                                std::move(evidence));
++                                                evidence);
++  // Series 0016 fixup 5: also record per-image-URL evidence so soft-mode
++  // notices only hit the specific AI-tagged images.
++  ProvenanceEvidenceStore::Get().RecordImageEvidence(image_url,
++                                                     evidence);
+   VLOG(1) << "provenance_gate: evidence recorded origin="
+           << url::Origin::Create(page_origin).Serialize()
++          << " image=" << image_url.spec()
+           << " signal=c2pa_unverified_ai_action";
+ }
+ 
+diff --git a/components/provenance_gate/browser/provenance_page_text_service.h b/components/provenance_gate/browser/provenance_page_text_service.h
+index 8afcf57ba4..0f12ae67f2 100644
+--- a/components/provenance_gate/browser/provenance_page_text_service.h
++++ b/components/provenance_gate/browser/provenance_page_text_service.h
+@@ -91,9 +91,10 @@ class ProvenancePageTextImpl : public mojom::ProvenancePageText {
+             ProvenanceBypassStore::Get().IsBypassed(image_url)) {
+           continue;
+         }
+-        if (!ProvenanceEvidenceStore::Get()
+-                 .GetEvidenceForOrigin(image_url)
+-                 .empty()) {
++        // Series 0016 fixup 5: per-image-URL check so only the specific
++        // AI-tagged images get notices, not every image from the origin.
++        if (ProvenanceEvidenceStore::Get()
++                 .HasEvidenceForImageUrl(image_url)) {
+           blocked.push_back(image_url_string);
+         }
+       }
+diff --git a/services/data_decoder/provenance_manifest_parser.cc b/services/data_decoder/provenance_manifest_parser.cc
+index c70cb25d76..ef915138f7 100644
+--- a/services/data_decoder/provenance_manifest_parser.cc
++++ b/services/data_decoder/provenance_manifest_parser.cc
+@@ -98,7 +98,11 @@ std::vector<uint8_t> CollectPngCaBx(const uint8_t* data, size_t size,
+   return out;
+ }
+ 
+-// Depth-limited JUMBF box walk collecting every "json" content-box payload.
++// Depth-limited JUMBF box walk collecting every "json" and "cbor"
++// content-box payload. CBOR is the C2PA standard binary serialization —
++// the c2pa-rs SDK and Adobe tools emit CBOR manifests, not JSON.
++// Series 0016 fixup 6b: collect both types so the ai_claimed substring
++// check sees the manifest data regardless of serialization format.
+ void WalkBoxes(const uint8_t* p, size_t size, int depth,
+                std::vector<std::string>* json_payloads) {
+   if (depth > 8) {
+@@ -111,7 +115,7 @@ void WalkBoxes(const uint8_t* p, size_t size, int depth,
+       return;  // implausible box: stop walking
+     }
+     const uint8_t* type = p + off + 4;
+-    if (FourCc(type, "json")) {
++    if (FourCc(type, "json") || FourCc(type, "cbor")) {
+       json_payloads->emplace_back(reinterpret_cast<const char*>(p + off + 8),
+                                   len - 8);
+     } else if (FourCc(type, "jumd") || FourCc(type, "jumb")) {
+@@ -203,8 +207,11 @@ ProvenanceManifest InspectProvenance(const uint8_t* data, size_t size) {
+     // Series 0008: flag AI-generation claims. One substring check covers
+     // both the action form (c2pa.actions/trainedAlgorithmicMedia) and the
+     // digital_source_type form
+-    // (http://c2pa.org/digitalsourcetype/trainedAlgorithmicMedia).
+-    if (j.find("trainedAlgorithmicMedia") != std::string::npos) {
++    // (http://cv.iptc.org/newscodes/digitalsourcetype/algorithmicMedia).
++    // Series 0016 fixup 6: "lgorithmicMedia" matches BOTH the action form
++    // (trainedAlgorithmicMedia, camelCase) and the digital source type
++    // (algorithmicMedia, lowercase) that the C2PA spec defines.
++    if (j.find("lgorithmicMedia") != std::string::npos) {
+       m.ai_claimed = true;
+     }
+     ExtractActions(j, &m.claimed_actions);
