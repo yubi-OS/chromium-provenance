@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html><head><title>Real C2PA test</title>
+<style>body{font-family:sans-serif;max-width:1100px;margin:40px auto;background:#fff;}
+.grid{display:grid;grid-template-columns:repeat(2,1fr);gap:20px;}
+.cell{border:1px solid #ddd;border-radius:8px;padding:12px;}
+.cell img{width:100%;border-radius:4px;}
+.cell p{font-size:13px;color:#555;margin-top:8px;}
+.cell h3{font-size:15px;margin:0 0 4px;}</style></head>
+<body>
+<h1>Real-world C2PA test</h1>
+<p>AI-generated and human-generated images side by side.</p>
+<div class="grid">
+<div class="cell"><h3>Synthetic demo</h3><p>C2PA manifest: trainedAlgorithmicMedia (synthetic test)</p><img src="https://raw.githubusercontent.com/yubi-OS/assets/main/demo/ai-image.jpg" width="256" height="256"></div>
+<div class="cell"><h3>c2pa-rs test fixture</h3><p>Real JPEG with full signed Adobe C2PA manifest (algorithmicMedia digital source type)</p><img src="https://raw.githubusercontent.com/contentauth/c2pa-rs/main/sdk/tests/fixtures/C.jpg" width="400"></div>
+<div class="cell"><h3>Cloudflare DALL-E</h3><p>WebP with Content Credentials preserved via CDN</p><img src="https://pub-3d2658f6f7004dc38a4dd6be147b6a86.r2.dev/dalle.webp" width="400"></div>
+<div class="cell"><h3>Helix Nebula (human)</h3><p>ESO Wide Field Imager photo, composited in Photoshop CS6 — NO C2PA manifest</p><img src="https://raw.githubusercontent.com/yubi-OS/assets/main/demo/helix-art.jpg" width="400"></div>
+</div>
+</body></html>
