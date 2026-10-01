@@ -1088,3 +1088,45 @@ index c70cb25d76..a26a89ed66 100644
        m.ai_claimed = true;
      }
      ExtractActions(j, &m.claimed_actions);
+diff --git a/components/provenance_gate/renderer/provenance_page_text_observer.cc b/components/provenance_gate/renderer/provenance_page_text_observer.cc
+index 12e9075cf5..40106b6e76 100644
+--- a/components/provenance_gate/renderer/provenance_page_text_observer.cc
++++ b/components/provenance_gate/renderer/provenance_page_text_observer.cc
+@@ -151,6 +151,20 @@ void ProvenancePageTextObserver::WalkImages() {
+ void ProvenancePageTextObserver::OnBlockedImages(
+     const std::vector<std::string>& blocked_urls) {
+   if (blocked_urls.empty()) {
++    // Series 0016 fixup 8: the image scanner's C2PA inspection runs
++    // asynchronously in the data_decoder utility process. On the first
++    // page load the evidence hasn't been recorded yet, so GetBlockedImages
++    // returns empty and the notices never appear. Retry WalkImages after
++    // a delay so the next query picks up the evidence.
++    constexpr int kMaxBlockedRetries = 8;
++    constexpr base::TimeDelta kBlockedRetryDelay = base::Seconds(2);
++    if (++blocked_retries_ <= kMaxBlockedRetries) {
++      base::SequencedTaskRunner::GetCurrentDefault()->PostDelayedTask(
++          FROM_HERE,
++          base::BindOnce(&ProvenancePageTextObserver::WalkImages,
++                         weak_factory_.GetWeakPtr()),
++          kBlockedRetryDelay);
++    }
+     return;
+   }
+   blink::WebLocalFrame* web_frame = render_frame()->GetWebFrame();
+diff --git a/components/provenance_gate/renderer/provenance_page_text_observer.h b/components/provenance_gate/renderer/provenance_page_text_observer.h
+index c664aa71e4..a38faf9b85 100644
+--- a/components/provenance_gate/renderer/provenance_page_text_observer.h
++++ b/components/provenance_gate/renderer/provenance_page_text_observer.h
+@@ -48,6 +48,12 @@ class ProvenancePageTextObserver : public content::RenderFrameObserver {
+   mojo::Remote<mojom::ProvenancePageText> remote_;
+   bool reported_ = false;
+   int allow_polls_left_ = 0;
++  // Series 0016 fixup 8: retries for the GetBlockedImages query. The image
++  // scanner's C2PA inspection is async — on the first page load the
++  // evidence hasn't been recorded yet, so the query returns empty and the
++  // notices never appear (the omnibox chip works because it polls every
++  // 500ms). Retry WalkImages up to kMaxBlockedRetries times.
++  int blocked_retries_ = 0;
+   base::WeakPtrFactory<ProvenancePageTextObserver> weak_factory_{this};
+ };
+ 
