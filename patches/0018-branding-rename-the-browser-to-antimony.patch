@@ -8689,7 +8689,7 @@ index 7ff06ccae6..3112717d8d 100644
    } else if (name.contains(u"Edge")) {
      type = DefaultBrowserType::kEdge;
 diff --git a/components/components_chromium_strings.grd b/components/components_chromium_strings.grd
-index 154a930642..4c8408f9d5 100644
+index 154a930642..e63fc88aa0 100644
 --- a/components/components_chromium_strings.grd
 +++ b/components/components_chromium_strings.grd
 @@ -196,7 +196,7 @@
@@ -8756,7 +8756,7 @@ index 154a930642..4c8408f9d5 100644
          </message>
        </if>
        <if expr="is_chromeos">
-@@ -267,12 +267,12 @@
+@@ -267,25 +267,25 @@
  
        <!-- chrome://crashes strings -->
        <message name="IDS_CRASH_DISABLED_MESSAGE" desc="The explanatory message for chrome://crashes when crash reporting is disabled">
@@ -8772,14 +8772,22 @@ index 154a930642..4c8408f9d5 100644
        </message>
  
        <message name="IDS_VERSION_UI_LICENSE" desc="The label below the copyright message, containing the URLs.">
-@@ -280,7 +280,7 @@
+-        Chromium is made possible by the <ph name="BEGIN_LINK_CHROMIUM">&lt;a target="_blank" href="$1" aria-description="$3"&gt;</ph>Chromium<ph name="END_LINK_CHROMIUM">&lt;/a&gt;</ph> open source project and other <ph name="BEGIN_LINK_OSS">&lt;a target="_blank" href="$2" aria-description="$3"&gt;</ph>open source software<ph name="END_LINK_OSS">&lt;/a&gt;</ph>.
++        Antimony is made possible by the <ph name="BEGIN_LINK_CHROMIUM">&lt;a target="_blank" href="$1" aria-description="$3"&gt;</ph>Chromium<ph name="END_LINK_CHROMIUM">&lt;/a&gt;</ph> open source project and other <ph name="BEGIN_LINK_OSS">&lt;a target="_blank" href="$2" aria-description="$3"&gt;</ph>open source software<ph name="END_LINK_OSS">&lt;/a&gt;</ph>.
        </message>
  
        <if expr="is_chromeos">
 -        <message name="IDS_VERSION_UI_LICENSE_CHROMIUM" desc="The label below the copyright message, containing the link to the Chromium project.">
+-          Chromium is made possible by the <ph name="BEGIN_LINK_CHROMIUM">&lt;a target="_blank" href="$1"&gt;</ph>Chromium<ph name="END_LINK_CHROMIUM">&lt;/a&gt;</ph> open source project.
 +        <message name="IDS_VERSION_UI_LICENSE_CHROMIUM" desc="The label below the copyright message, containing the link to the Antimony project.">
-           Chromium is made possible by the <ph name="BEGIN_LINK_CHROMIUM">&lt;a target="_blank" href="$1"&gt;</ph>Chromium<ph name="END_LINK_CHROMIUM">&lt;/a&gt;</ph> open source project.
++          Antimony is made possible by the <ph name="BEGIN_LINK_CHROMIUM">&lt;a target="_blank" href="$1"&gt;</ph>Chromium<ph name="END_LINK_CHROMIUM">&lt;/a&gt;</ph> open source project.
          </message>
+ 
+         <message name="IDS_VERSION_UI_LICENSE_OTHER" desc="The label below the copyright message, containing the link to other open source software.">
+-          Chromium is also made possible by other <ph name="BEGIN_LINK_OSS">&lt;a href='#'&gt;</ph>open source software<ph name="END_LINK_OSS">&lt;/a&gt;</ph>.
++          Antimony is also made possible by other <ph name="BEGIN_LINK_OSS">&lt;a href='#'&gt;</ph>open source software<ph name="END_LINK_OSS">&lt;/a&gt;</ph>.
+         </message>
+       </if>
  
 @@ -298,36 +298,36 @@
          </then>
