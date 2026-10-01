@@ -1,0 +1,633 @@
+diff --git a/chrome/browser/prefs/browser_prefs.cc b/chrome/browser/prefs/browser_prefs.cc
+index ea634f1e71..a8ef505783 100644
+--- a/chrome/browser/prefs/browser_prefs.cc
++++ b/chrome/browser/prefs/browser_prefs.cc
+@@ -1758,6 +1758,8 @@ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry,
+   registry->RegisterStringPref(prefs::kProvenanceMode,
+                                std::string("block_on_detect"));
+   registry->RegisterStringPref(prefs::kProvenanceExemptOrigins, std::string());
++  registry->RegisterBooleanPref(prefs::kProvenanceBlockAiModels, false);
++  registry->RegisterStringPref(prefs::kProvenanceAiExemptOrigins, std::string());
+   AccessibilityUIMessageHandler::RegisterProfilePrefs(registry);
+   accessibility_annotator::prefs::RegisterProfilePrefs(registry);
+   AimEligibilityService::RegisterProfilePrefs(registry);
+diff --git a/chrome/browser/provenance/provenance_prefs_service.cc b/chrome/browser/provenance/provenance_prefs_service.cc
+index 037a12b343..4f08248892 100644
+--- a/chrome/browser/provenance/provenance_prefs_service.cc
++++ b/chrome/browser/provenance/provenance_prefs_service.cc
+@@ -38,6 +38,14 @@ ProvenancePrefsService::ProvenancePrefsService(PrefService* prefs)
+       prefs::kProvenanceExemptOrigins,
+       base::BindRepeating(&ProvenancePrefsService::SyncFromPrefs,
+                           base::Unretained(this)));
++  pref_change_registrar_.Add(
++      prefs::kProvenanceBlockAiModels,
++      base::BindRepeating(&ProvenancePrefsService::SyncFromPrefs,
++                          base::Unretained(this)));
++  pref_change_registrar_.Add(
++      prefs::kProvenanceAiExemptOrigins,
++      base::BindRepeating(&ProvenancePrefsService::SyncFromPrefs,
++                          base::Unretained(this)));
+   exemption_subscription_ =
+       provenance_gate::ProvenanceBypassStore::Get().AddExemptionChangedCallback(
+           base::BindRepeating(&ProvenancePrefsService::OnExemptionChanged,
+@@ -56,6 +64,16 @@ void ProvenancePrefsService::SyncFromPrefs() {
+     VLOG(1) << "provenance_gate: prefs mode="
+             << provenance_gate::ModeToString(mode);
+   }
++  provenance_gate::ProvenancePolicyStore::Get().SetBlockAiModels(
++      prefs_->GetBoolean(prefs::kProvenanceBlockAiModels));
++  std::vector<std::string> ai_origins;
++  for (const std::string& origin :
++       base::SplitString(prefs_->GetString(prefs::kProvenanceAiExemptOrigins),
++                         ",", base::TRIM_WHITESPACE,
++                         base::SPLIT_WANT_NONEMPTY)) {
++    ai_origins.push_back(origin);
++  }
++  provenance_gate::ProvenancePolicyStore::Get().SetAiExemptions(ai_origins);
+   for (const std::string& origin :
+        base::SplitString(prefs_->GetString(prefs::kProvenanceExemptOrigins),
+                          ",", base::TRIM_WHITESPACE,
+diff --git a/chrome/browser/provenance/provenance_settings_handler.cc b/chrome/browser/provenance/provenance_settings_handler.cc
+index 3298ff5f67..20c41c278d 100644
+--- a/chrome/browser/provenance/provenance_settings_handler.cc
++++ b/chrome/browser/provenance/provenance_settings_handler.cc
+@@ -28,6 +28,14 @@ void ProvenanceSettingsHandler::RegisterMessages() {
+       "setExemptOrigins",
+       base::BindRepeating(&ProvenanceSettingsHandler::HandleSetExemptOrigins,
+                           base::Unretained(this)));
++  web_ui()->RegisterMessageCallback(
++      "setBlockAiModels",
++      base::BindRepeating(&ProvenanceSettingsHandler::HandleSetBlockAiModels,
++                          base::Unretained(this)));
++  web_ui()->RegisterMessageCallback(
++      "setAiExemptOrigins",
++      base::BindRepeating(&ProvenanceSettingsHandler::HandleSetAiExemptOrigins,
++                          base::Unretained(this)));
+ }
+ 
+ void ProvenanceSettingsHandler::HandleGetState(
+@@ -41,9 +49,20 @@ void ProvenanceSettingsHandler::HandleGetState(
+     if (!origins_str.empty()) origins_str += ",";
+     origins_str += o;
+   }
++  const bool block_ai =
++      provenance_gate::ProvenancePolicyStore::Get().BlockAiModels();
++  const auto ai_exemptions =
++      provenance_gate::ProvenancePolicyStore::Get().AiExemptions();
++  std::string ai_origins_str;
++  for (const std::string& o : ai_exemptions) {
++    if (!ai_origins_str.empty()) ai_origins_str += ",";
++    ai_origins_str += o;
++  }
+   web_ui()->CallJavascriptFunctionUnsafe("provenanceStateReady",
+                                          base::Value(mode),
+-                                         base::Value(origins_str));
++                                         base::Value(origins_str),
++                                         base::Value(block_ai),
++                                         base::Value(ai_origins_str));
+ }
+ 
+ void ProvenanceSettingsHandler::HandleSetMode(
+@@ -80,4 +99,35 @@ void ProvenanceSettingsHandler::HandleSetExemptOrigins(
+   VLOG(1) << "provenance_gate: settings exempt_origins=" << origins_str;
+ }
+ 
++void ProvenanceSettingsHandler::HandleSetBlockAiModels(
++    const base::ListValue& args) {
++  bool enabled = false;
++  for (const auto& v : args) {
++    if (v.is_bool()) { enabled = v.GetBool(); break; }
++  }
++  provenance_gate::ProvenancePolicyStore::Get().SetBlockAiModels(enabled);
++  Profile* profile = Profile::FromWebUI(web_ui());
++  profile->GetPrefs()->SetBoolean(prefs::kProvenanceBlockAiModels, enabled);
++  VLOG(1) << "provenance_gate: settings block_ai_models=" << enabled;
++}
++
++void ProvenanceSettingsHandler::HandleSetAiExemptOrigins(
++    const base::ListValue& args) {
++  std::string origins_str;
++  for (const auto& v : args) {
++    if (v.is_string()) { origins_str = v.GetString(); break; }
++  }
++  Profile* profile = Profile::FromWebUI(web_ui());
++  profile->GetPrefs()->SetString(prefs::kProvenanceAiExemptOrigins,
++                                 origins_str);
++  std::vector<std::string> origins;
++  for (const std::string& origin :
++       base::SplitString(origins_str, ",", base::TRIM_WHITESPACE,
++                         base::SPLIT_WANT_NONEMPTY)) {
++    origins.push_back(origin);
++  }
++  provenance_gate::ProvenancePolicyStore::Get().SetAiExemptions(origins);
++  VLOG(1) << "provenance_gate: settings ai_exempt_origins=" << origins_str;
++}
++
+ }  // namespace provenance
+diff --git a/chrome/browser/provenance/provenance_settings_handler.h b/chrome/browser/provenance/provenance_settings_handler.h
+index 5672e23185..7bb8e8941c 100644
+--- a/chrome/browser/provenance/provenance_settings_handler.h
++++ b/chrome/browser/provenance/provenance_settings_handler.h
+@@ -17,6 +17,8 @@ class ProvenanceSettingsHandler : public content::WebUIMessageHandler {
+   void HandleGetState(const base::ListValue& args);
+   void HandleSetMode(const base::ListValue& args);
+   void HandleSetExemptOrigins(const base::ListValue& args);
++  void HandleSetBlockAiModels(const base::ListValue& args);
++  void HandleSetAiExemptOrigins(const base::ListValue& args);
+ };
+ 
+ }  // namespace provenance
+diff --git a/chrome/browser/resources/settings/provenance_page/provenance_page.html b/chrome/browser/resources/settings/provenance_page/provenance_page.html
+index d40c8cd3c7..9fd820ae07 100644
+--- a/chrome/browser/resources/settings/provenance_page/provenance_page.html
++++ b/chrome/browser/resources/settings/provenance_page/provenance_page.html
+@@ -89,3 +89,31 @@
+     <cr-button class="prov-add" on-click="onAdd_">Add</cr-button>
+   </div>
+ </div>
++<div class="settings-box">
++  <h2>Block on device models</h2>
++</div>
++<div class="prov-section">
++  <p class="section-desc">When enabled, pages cannot use the browser built-in AI models (Writer, Rewriter, Summarizer). Exempted sites keep access.</p>
++  <div style="display:flex;align-items:center;gap:8px;padding:8px 0;">
++    <cr-toggle id="blockAiToggle" checked="{{blockAiModels_}}" on-change="onBlockAiToggle_"></cr-toggle>
++    <span style="font-size:13px;">Block on device models</span>
++  </div>
++</div>
++<div class="settings-box">
++  <h2>AI exempt sites</h2>
++</div>
++<div class="prov-section">
++  <p class="section-desc">Sites on this list can use the browser built-in AI models even when blocking is enabled.</p>
++  <template is="dom-repeat" items="[[aiExemptOrigins_]]">
++    <div class="prov-exempt-row">
++      <span>[[item]]</span>
++      <cr-button class="prov-remove" data-origin$="[[item]]" on-click="onAiRemoveClick_">Remove</cr-button>
++    </div>
++  </template>
++  <div class="prov-empty" hidden$="[[aiExemptOrigins_.length]]">No AI exempt sites.</div>
++  <div class="prov-add-row">
++    <cr-input aria-label="Add an AI exempt site" placeholder="example.com" value="{{newAiOrigin_}}"></cr-input>
++    <cr-button class="prov-add" on-click="onAiAdd_">Add</cr-button>
++  </div>
++</div>
++</body></html>
+diff --git a/chrome/browser/resources/settings/provenance_page/provenance_page.ts b/chrome/browser/resources/settings/provenance_page/provenance_page.ts
+index 6d7b0dd71a..8df3b7ba45 100644
+--- a/chrome/browser/resources/settings/provenance_page/provenance_page.ts
++++ b/chrome/browser/resources/settings/provenance_page/provenance_page.ts
+@@ -5,6 +5,7 @@ import 'chrome://resources/cr_elements/cr_button/cr_button.js';
+ import 'chrome://resources/cr_elements/cr_input/cr_input.js';
+ import 'chrome://resources/cr_elements/cr_radio_button/cr_radio_button.js';
+ import 'chrome://resources/cr_elements/cr_radio_group/cr_radio_group.js';
++import 'chrome://resources/cr_elements/cr_toggle/cr_toggle.js';
+ 
+ interface ChromeSend {
+   send(name: string, args?: unknown[]): void;
+@@ -35,12 +36,18 @@ export class SettingsProvenancePageElement extends PolymerElement {
+       mode_: {type: String},
+       exemptOrigins_: {type: Array, value: () => []},
+       newOrigin_: {type: String, value: ''},
++      blockAiModels_: {type: Boolean, value: false},
++      aiExemptOrigins_: {type: Array, value: () => []},
++      newAiOrigin_: {type: String, value: ''},
+     };
+   }
+ 
+   declare private mode_: string;
+   declare private exemptOrigins_: string[];
+   declare private newOrigin_: string;
++  declare private blockAiModels_: boolean;
++  declare private aiExemptOrigins_: string[];
++  declare private newAiOrigin_: string;
+   // Series 0016 fixup 2: tracks the last mode the browser reported so the
+   // selected-changed handler only sends user-initiated changes.
+   private lastBrowserMode_: string = '';
+@@ -48,9 +55,11 @@ export class SettingsProvenancePageElement extends PolymerElement {
+   override connectedCallback() {
+     super.connectedCallback();
+     (window as unknown as {provenanceStateReady: unknown}).provenanceStateReady =
+-        (mode: string, exemptOrigins: string) => {
++        (mode: string, exemptOrigins: string, blockAi: boolean, aiExemptOrigins: string) => {
+           this.lastBrowserMode_ = mode;
+           this.mode_ = mode;
++          this.blockAiModels_ = blockAi;
++          this.aiExemptOrigins_ = aiExemptOrigins ? aiExemptOrigins.split(',').filter((o: string) => o.length > 0) : [];
+           this.exemptOrigins_ =
+               exemptOrigins ? exemptOrigins.split(',').filter(
+                   (o: string) => o.length > 0) : [];
+@@ -92,6 +101,34 @@ export class SettingsProvenancePageElement extends PolymerElement {
+     this.newOrigin_ = '';
+   }
+ 
++  private onBlockAiToggle_(e: Event) {
++    const enabled = (e.target as unknown as {checked: boolean}).checked;
++    this.blockAiModels_ = enabled;
++    chromeSend().send('setBlockAiModels', [enabled]);
++  }
++
++  private onAiAdd_() {
++    const origin = (this.newAiOrigin_ || '').trim().replace(/\/$/, '');
++    if (!origin) {
++      return;
++    }
++    const current = this.aiExemptOrigins_ || [];
++    if (current.indexOf(origin) === -1) {
++      current.push(origin);
++    }
++    chromeSend().send('setAiExemptOrigins', [current.join(',')]);
++    this.newAiOrigin_ = '';
++  }
++
++  private onAiRemoveClick_(e: Event) {
++    const origin = (e.currentTarget as HTMLElement).dataset['origin'] || '';
++    if (!origin) {
++      return;
++    }
++    const kept = (this.aiExemptOrigins_ || []).filter((o: string) => o !== origin);
++    chromeSend().send('setAiExemptOrigins', [kept.join(',')]);
++  }
++
+   private onRemoveClick_(e: Event) {
+     const origin = (e.currentTarget as HTMLElement).dataset['origin'] || '';
+     if (!origin) {
+diff --git a/chrome/common/pref_names.h b/chrome/common/pref_names.h
+index 553b111803..e7e50e5c53 100644
+--- a/chrome/common/pref_names.h
++++ b/chrome/common/pref_names.h
+@@ -3295,6 +3295,10 @@ inline constexpr int kCpuPerformanceTierOverrideNone = -1;
+ inline constexpr char kProvenanceMode[] = "provenance.mode";
+ inline constexpr char kProvenanceExemptOrigins[] =
+     "provenance.exempt_origins";
++inline constexpr char kProvenanceBlockAiModels[] =
++    "provenance.block_ai_models";
++inline constexpr char kProvenanceAiExemptOrigins[] =
++    "provenance.ai_exempt_origins";
+ 
+ }  // namespace prefs
+ 
+diff --git a/components/provenance_gate/browser/provenance_page_text_service.h b/components/provenance_gate/browser/provenance_page_text_service.h
+index 0f12ae67f2..2326526dae 100644
+--- a/components/provenance_gate/browser/provenance_page_text_service.h
++++ b/components/provenance_gate/browser/provenance_page_text_service.h
+@@ -105,6 +105,19 @@ class ProvenancePageTextImpl : public mojom::ProvenancePageText {
+   // Series 0014 fixup: soft-mode Allow relay — the renderer observer polls
+   // for the notice's Allow clicks and relays them here; the exemption store
+   // is browser-side, and the prefs service persists it.
++  void SetAiBlocking(
++      bool enabled,
++      const std::vector<std::string>& ai_exempt_origins) override {
++    // Series 0017: the browser pushes the AI blocking state. The
++    // browser-side implementation stores it in the ProvenancePolicyStore
++    // (which the renderer reads via its own process-local copy; for
++    // cross-process sync, see the mojo push-on-bind comment).
++    ProvenancePolicyStore::Get().SetBlockAiModels(enabled);
++    ProvenancePolicyStore::Get().SetAiExemptions(ai_exempt_origins);
++    VLOG(1) << "provenance_gate: ai_blocking set to " << enabled
++            << " with " << ai_exempt_origins.size() << " exemptions";
++  }
++
+   void RequestExemption(const std::string& origin_url) override {
+     // Series 0016 fixup 2: the soft-mode Allow is PAGE-scoped - it resets
+     // on the next main-frame navigation, so the block returns on refresh.
+@@ -112,6 +125,16 @@ class ProvenancePageTextImpl : public mojom::ProvenancePageText {
+     VLOG(1) << "provenance_gate: page exemption requested for " << origin_url;
+   }
+ 
++  // Series 0017 fixup: mode query for the renderer's first-load reload
++  // gate - the one-time full-block reload must only fire in
++  // kBlockOnDetect (in soft mode it is a visible refresh and wipes the
++  // page-scoped Allow exemption).
++  void GetProvenanceMode(const std::string& page_url,
++                         GetProvenanceModeCallback callback) override {
++    std::move(callback).Run(
++        ModeToString(ProvenancePolicyStore::Get().mode()));
++  }
++
+  private:
+   raw_ptr<content::BrowserContext> browser_context_;
+   std::unique_ptr<ProvenancePageImageScanner> image_scanner_;
+diff --git a/components/provenance_gate/browser/provenance_policy_store.cc b/components/provenance_gate/browser/provenance_policy_store.cc
+index fd10706502..74e9b68f59 100644
+--- a/components/provenance_gate/browser/provenance_policy_store.cc
++++ b/components/provenance_gate/browser/provenance_policy_store.cc
+@@ -1,6 +1,8 @@
+ // Copyright 2026 The yubi-OS Authors. BSD-3-Clause (matches Chromium).
+ #include "components/provenance_gate/browser/provenance_policy_store.h"
+ 
++#include "url/origin.h"
++
+ namespace provenance_gate {
+ 
+ ProvenancePolicyStore& ProvenancePolicyStore::Get() {
+@@ -27,6 +29,37 @@ Mode ProvenancePolicyStore::mode() {
+   return mode_;
+ }
+ 
++void ProvenancePolicyStore::SetBlockAiModels(bool enabled) {
++  base::AutoLock lock(lock_);
++  block_ai_models_ = enabled;
++}
++
++bool ProvenancePolicyStore::BlockAiModels() {
++  base::AutoLock lock(lock_);
++  return block_ai_models_;
++}
++
++void ProvenancePolicyStore::SetAiExemptions(
++    const std::vector<std::string>& origins) {
++  base::AutoLock lock(lock_);
++  ai_exempt_origins_.clear();
++  for (const std::string& origin : origins) {
++    ai_exempt_origins_.insert(origin);
++  }
++}
++
++std::vector<std::string> ProvenancePolicyStore::AiExemptions() {
++  base::AutoLock lock(lock_);
++  return std::vector<std::string>(ai_exempt_origins_.begin(),
++                                  ai_exempt_origins_.end());
++}
++
++bool ProvenancePolicyStore::IsAiExempted(const GURL& url) {
++  const std::string origin_key = url::Origin::Create(url).Serialize();
++  base::AutoLock lock(lock_);
++  return ai_exempt_origins_.contains(origin_key);
++}
++
+ const char* ModeToString(Mode mode) {
+   switch (mode) {
+     case Mode::kBlockOnDetect:
+diff --git a/components/provenance_gate/browser/provenance_policy_store.h b/components/provenance_gate/browser/provenance_policy_store.h
+index 8b7bddd6e2..3dc03c92d8 100644
+--- a/components/provenance_gate/browser/provenance_policy_store.h
++++ b/components/provenance_gate/browser/provenance_policy_store.h
+@@ -2,11 +2,14 @@
+ #ifndef COMPONENTS_PROVENANCE_GATE_BROWSER_PROVENANCE_POLICY_STORE_H_
+ #define COMPONENTS_PROVENANCE_GATE_BROWSER_PROVENANCE_POLICY_STORE_H_
+ 
++#include <set>
+ #include <string>
++#include <vector>
+ 
+ #include "base/no_destructor.h"
+ #include "base/synchronization/lock.h"
+ #include "components/provenance_gate/policy.h"
++#include "url/gurl.h"
+ 
+ namespace provenance_gate {
+ 
+@@ -23,6 +26,14 @@ class ProvenancePolicyStore {
+   void SetMode(Mode mode);
+   Mode mode();
+ 
++  // Series 0017: on-device AI model blocking. Independent of the provenance
++  // gate mode — this is a separate toggle the user controls in settings.
++  void SetBlockAiModels(bool enabled);
++  bool BlockAiModels();
++  void SetAiExemptions(const std::vector<std::string>& origins);
++  std::vector<std::string> AiExemptions();
++  bool IsAiExempted(const GURL& url);
++
+  private:
+   friend class base::NoDestructor<ProvenancePolicyStore>;
+   ProvenancePolicyStore() = default;
+@@ -30,6 +41,8 @@ class ProvenancePolicyStore {
+   base::Lock lock_;
+   Mode mode_ = Mode::kBlockOnDetect;
+   bool initialized_ = false;
++  bool block_ai_models_ = false;
++  std::set<std::string> ai_exempt_origins_;
+ };
+ 
+ // Mode <-> settings-string helpers (chrome prefs, --provenance-mode).
+diff --git a/components/provenance_gate/public/mojom/provenance_gate.mojom b/components/provenance_gate/public/mojom/provenance_gate.mojom
+index 49e41abedd..555ffb9281 100644
+--- a/components/provenance_gate/public/mojom/provenance_gate.mojom
++++ b/components/provenance_gate/public/mojom/provenance_gate.mojom
+@@ -29,4 +29,15 @@ interface ProvenancePageText {
+   // (including the marker re-point) do not consult the network-layer
+   // throttle in chrome — the exemption must ride the mojo pipe.
+   RequestExemption(string origin_url);
++
++  // Series 0017 fixup: mode query for the renderer's first-load reload
++  // gate. The one-time full-block reload must only fire in
++  // block_on_detect; in soft mode it is a visible extra refresh and its
++  // main-frame navigation also clears the page-scoped Allow exemption.
++  GetProvenanceMode(string page_url) => (string mode);
++
++  // Series 0017: push the on-device AI blocking state to the renderer.
++  // The browser calls this when the interface is bound and when the
++  // toggle or exempt list changes in settings.
++  SetAiBlocking(bool enabled, array<string> ai_exempt_origins);
+ };
+diff --git a/components/provenance_gate/renderer/provenance_page_text_observer.cc b/components/provenance_gate/renderer/provenance_page_text_observer.cc
+index 88bb002163..30cca87779 100644
+--- a/components/provenance_gate/renderer/provenance_page_text_observer.cc
++++ b/components/provenance_gate/renderer/provenance_page_text_observer.cc
+@@ -1,12 +1,14 @@
+ // Copyright 2026 The yubi-OS Authors. BSD-3-Clause (matches Chromium).
+ #include "components/provenance_gate/renderer/provenance_page_text_observer.h"
+ 
++#include <set>
+ #include <string>
+ #include <utility>
+ #include <vector>
+ 
+ #include "base/logging.h"
+ #include "base/memory/weak_ptr.h"
++#include "base/no_destructor.h"
+ #include "base/task/sequenced_task_runner.h"
+ #include "base/time/time.h"
+ #include "content/public/renderer/render_frame.h"
+@@ -17,7 +19,9 @@
+ #include "third_party/blink/public/web/web_element_collection.h"
+ #include "third_party/blink/public/web/web_local_frame.h"
+ #include "third_party/blink/public/web/web_script_source.h"
++#include "components/provenance_gate/browser/provenance_policy_store.h"
+ #include "url/gurl.h"
++#include "url/origin.h"
+ 
+ namespace provenance_gate {
+ 
+@@ -26,6 +30,14 @@ namespace {
+ // (Policy::classifier_min_chars) is applied browser-side.
+ constexpr size_t kMaxReportedChars = 20000;
+ 
++// Series 0017 fixup: tracks origins that have already had their one-time
++// reload for full-block-on-first-load. Per-process (not per-frame) so the
++// reload fires exactly once per origin and never loops.
++std::set<std::string>& ReloadedOrigins() {
++  static base::NoDestructor<std::set<std::string>> instance;
++  return *instance;
++}
++
+ // Series 0014: escape a URL for embedding in a JS double-quoted string.
+ std::string JsQuoteEscape(const std::string& in) {
+   std::string out;
+@@ -146,6 +158,46 @@ void ProvenancePageTextObserver::WalkImages() {
+         base::BindOnce(&ProvenancePageTextObserver::OnBlockedImages,
+                        weak_factory_.GetWeakPtr()));
+   }
++  // Series 0017 fixup: the one-time reload is a full-block-only
++  // mechanism. In soft mode it is a visible extra refresh and its
++  // main-frame navigation also clears the page-scoped Allow exemption, so
++  // gate it on the live mode via a browser query. Error pages
++  // (chrome-error://) have no images so the reload never loops.
++  const std::string origin_key = url::Origin::Create(url).Serialize();
++  if (!ReloadedOrigins().contains(origin_key) && !image_urls.empty()) {
++    if (!remote_.is_bound()) {
++      render_frame()->GetBrowserInterfaceBroker().GetInterface(
++          remote_.BindNewPipeAndPassReceiver());
++    }
++    remote_->GetProvenanceMode(
++        url.spec(),
++        base::BindOnce(
++            [](base::WeakPtr<ProvenancePageTextObserver> self,
++               const std::string& origin_key, const std::string& mode) {
++              if (!self || mode != "block_on_detect" ||
++                  ReloadedOrigins().contains(origin_key)) {
++                return;
++              }
++              ReloadedOrigins().insert(origin_key);
++              base::SequencedTaskRunner::GetCurrentDefault()
++                  ->PostDelayedTask(
++                      FROM_HERE,
++                      base::BindOnce(
++                          [](base::WeakPtr<ProvenancePageTextObserver> self) {
++                            if (!self) return;
++                            auto* frame =
++                                self->render_frame()->GetWebFrame();
++                            if (frame) {
++                              frame->ExecuteScript(blink::WebScriptSource(
++                                  blink::WebString::FromUtf8(
++                                      "location.reload();")));
++                            }
++                          },
++                          self),
++                      base::Seconds(4));
++            },
++            weak_factory_.GetWeakPtr(), origin_key));
++  }
+ }
+ 
+ void ProvenancePageTextObserver::OnBlockedImages(
+@@ -237,6 +289,14 @@ void ProvenancePageTextObserver::OnBlockedImages(
+       base::Seconds(1));
+ }
+ 
++void ProvenancePageTextObserver::SetAiBlocking(
++    bool enabled, const std::vector<std::string>& ai_exempt_origins) {
++  ai_blocking_enabled_ = enabled;
++  ai_exempt_origins_ = ai_exempt_origins;
++  VLOG(1) << "provenance_gate: ai_blocking=" << enabled
++          << " exemptions=" << ai_exempt_origins_.size();
++}
++
+ void ProvenancePageTextObserver::PollAllowRequests() {
+   if (allow_polls_left_ <= 0) {
+     return;
+@@ -286,4 +346,49 @@ void ProvenancePageTextObserver::OnDestruct() {
+   delete this;
+ }
+ 
++void ProvenancePageTextObserver::DidCreateScriptContext(
++    v8::Local<v8::Context> context,
++    int world_id) {
++  // Series 0017: on-device AI model blocking. Only the main world
++  // (world_id == 0) hosts page scripts; extension and isolated worlds
++  // get their own contexts and should not be affected.
++  if (world_id != 0) {
++    return;
++  }
++  if (!ai_blocking_enabled_) {
++    return;
++  }
++  // Check if the current origin is exempt.
++  blink::WebLocalFrame* web_frame = render_frame()->GetWebFrame();
++  if (!web_frame) {
++    return;
++  }
++  blink::WebDocument document = web_frame->GetDocument();
++  if (document.IsNull()) {
++    return;
++  }
++  const GURL url(document.Url().GetString().Utf8());
++  if (url.is_valid() &&
++      ProvenancePolicyStore::Get().IsAiExempted(url)) {
++    return;
++  }
++  // Delete the built-in AI API constructors from the global object.
++  v8::Isolate* isolate = v8::Isolate::GetCurrent();
++  v8::HandleScope handle_scope(isolate);
++  v8::Local<v8::Object> global = context->Global();
++  const char* kAiApis[] = {"Writer", "Rewriter", "Summarizer"};
++  for (const char* api : kAiApis) {
++    v8::Local<v8::String> name =
++        v8::String::NewFromUtf8(isolate, api).ToLocalChecked();
++    global->Delete(context, name);
++    // Also try the prototype chain (DOM interfaces are on Window.prototype).
++    auto proto_val = global->GetPrototype();
++    if (!proto_val.IsEmpty() && proto_val->IsObject()) {
++      proto_val.As<v8::Object>()->Delete(context, name);
++    }
++  }
++  VLOG(1) << "provenance_gate: on-device AI APIs blocked for "
++          << url.spec();
++}
++
+ }  // namespace provenance_gate
+diff --git a/components/provenance_gate/renderer/provenance_page_text_observer.h b/components/provenance_gate/renderer/provenance_page_text_observer.h
+index a38faf9b85..3fb7c6369b 100644
+--- a/components/provenance_gate/renderer/provenance_page_text_observer.h
++++ b/components/provenance_gate/renderer/provenance_page_text_observer.h
+@@ -6,6 +6,7 @@
+ #include <vector>
+ 
+ #include "base/memory/weak_ptr.h"
++#include "v8/include/v8.h"
+ #include "components/provenance_gate/public/mojom/provenance_gate.mojom.h"
+ #include "content/public/renderer/render_frame_observer.h"
+ #include "mojo/public/cpp/bindings/remote.h"
+@@ -33,6 +34,8 @@ class ProvenancePageTextObserver : public content::RenderFrameObserver {
+  private:
+   // content::RenderFrameObserver:
+   void DidFinishLoad() override;
++  void DidCreateScriptContext(v8::Local<v8::Context> context,
++                              int world_id) override;
+   void OnDestruct() override;
+ 
+   // Series 0008: runs as a posted task after DidFinishLoad unwinds.
+@@ -41,12 +44,19 @@ class ProvenancePageTextObserver : public content::RenderFrameObserver {
+   // Series 0014: soft mode — swaps gate-blocked images for notices.
+   void OnBlockedImages(const std::vector<std::string>& blocked_urls);
+ 
++  // Series 0017: browser pushes the on-device AI blocking state.
++  void SetAiBlocking(bool enabled,
++                     const std::vector<std::string>& ai_exempt_origins);
++
+   // Series 0014 fixup: polls for Allow clicks (the page JS tags
+   // data-provenance-allow) and relays them over mojo.
+   void PollAllowRequests();
+ 
+   mojo::Remote<mojom::ProvenancePageText> remote_;
+   bool reported_ = false;
++  // Series 0017: on-device AI blocking state, pushed via mojo.
++  bool ai_blocking_enabled_ = false;
++  std::vector<std::string> ai_exempt_origins_;
+   int allow_polls_left_ = 0;
+   // Series 0016 fixup 8: retries for the GetBlockedImages query. The image
+   // scanner's C2PA inspection is async — on the first page load the
+@@ -54,6 +64,11 @@ class ProvenancePageTextObserver : public content::RenderFrameObserver {
+   // notices never appear (the omnibox chip works because it polls every
+   // 500ms). Retry WalkImages up to kMaxBlockedRetries times.
+   int blocked_retries_ = 0;
++  // Series 0017: one-time reload for full-block-on-first-load. The image
++  // scanner records evidence asynchronously; the throttle's first check
++  // sees an empty store and allows. A reload gives the throttle evidence
++  // to make an informed decision.
++
+   base::WeakPtrFactory<ProvenancePageTextObserver> weak_factory_{this};
+ };
+ 
