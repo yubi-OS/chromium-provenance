@@ -8537,7 +8537,7 @@ znQqlCqfV8suZquLCsY~wELsFdMQ^S0Rc)z$&eP7r8*ly(1f?xbRh|*b00000NkvXX
 Hu0mjf2Vv2I
 
 diff --git a/chrome/app/vector_icons/chrome_product.icon b/chrome/app/vector_icons/chrome_product.icon
-index 31cb949b87..cfaa780493 100644
+index 31cb949b87..d0b5f6bbe6 100644
 --- a/chrome/app/vector_icons/chrome_product.icon
 +++ b/chrome/app/vector_icons/chrome_product.icon
 @@ -1,47 +1,26 @@
@@ -8561,10 +8561,10 @@ index 31cb949b87..cfaa780493 100644
 -R_CUBIC_TO, -0.69f, 0, -1.28f, 0.24f, -1.77f, 0.73f,
 -R_ARC_TO, 2.41f, 2.41f, 0, 0, 0, -0.73f, 1.77f,
 -R_CUBIC_TO, 0, 0.7f, 0.24f, 1.29f, 0.73f, 1.77f,
-+MOVE_TO, 182.22, 136.61,
-+ARC_TO, 90, 90, 0, 1, 1, 182.22, 63.39,
-+LINE_TO, 136.54, 83.73,
-+ARC_TO, 40, 40, 0, 1, 0, 136.54, 116.27,
++MOVE_TO, 63.39, 182.22,
++ARC_TO, 90, 90, 0, 1, 1, 136.61, 182.22,
++LINE_TO, 116.27, 136.54,
++ARC_TO, 40, 40, 0, 1, 0, 83.73, 136.54,
  CLOSE,
 -MOVE_TO, 8, 11.77f,
 -R_CUBIC_TO, 0.13f, 0, 0.25f, 0, 0.39f, -0.01f,
@@ -8577,8 +8577,8 @@ index 31cb949b87..cfaa780493 100644
 -R_CUBIC_TO, 0.33f, 0.59f, 0.77f, 1.05f, 1.35f, 1.38f,
 -R_CUBIC_TO, 0.58f, 0.33f, 1.2f, 0.5f, 1.87f, 0.5f,
 +MOVE_TO, 100, 100,
-+LINE_TO, 129.23, 86.98,
-+ARC_TO, 32, 32, 0, 1, 0, 129.23, 113.02,
++LINE_TO, 113.02, 129.23,
++ARC_TO, 32, 32, 0, 1, 0, 86.98, 129.23,
  CLOSE,
 -MOVE_TO, 8, 4.27f,
 -R_ARC_TO, 3.56f, 3.56f, 0, 0, 0, -2.2f, 0.73f,
@@ -8588,11 +8588,11 @@ index 31cb949b87..cfaa780493 100644
 -ARC_TO, 6.65f, 6.65f, 0, 0, 1, 8, 1.38f,
 -R_CUBIC_TO, 1.09f, 0, 2.13f, 0.26f, 3.09f, 0.77f,
 -R_ARC_TO, 6.72f, 6.72f, 0, 0, 1, 2.38f, 2.12f,
-+MOVE_TO, 184.5, 62.38,
-+ARC_TO, 92.5, 92.5, 0, 0, 1, 184.5, 137.62,
-+ARC_TO, 2.5, 2.5, 0, 0, 1, 179.94, 135.59,
-+ARC_TO, 87.5, 87.5, 0, 0, 0, 179.94, 64.41,
-+ARC_TO, 2.5, 2.5, 0, 0, 1, 184.5, 62.38,
++MOVE_TO, 137.62, 184.5,
++ARC_TO, 92.5, 92.5, 0, 0, 1, 62.38, 184.5,
++ARC_TO, 2.5, 2.5, 0, 0, 1, 64.41, 179.94,
++ARC_TO, 87.5, 87.5, 0, 0, 0, 135.59, 179.94,
++ARC_TO, 2.5, 2.5, 0, 0, 1, 137.62, 184.5,
 +CLOSE,
 +MOVE_TO, 89, 170,
 +ARC_TO, 11, 11, 0, 0, 1, 111, 170,
@@ -8813,7 +8813,7 @@ index 154a930642..4c8408f9d5 100644
        </if>
      </messages>
 diff --git a/components/omnibox/browser/vector_icons/chrome_product.icon b/components/omnibox/browser/vector_icons/chrome_product.icon
-index bf0481342d..cfaa780493 100644
+index bf0481342d..d0b5f6bbe6 100644
 --- a/components/omnibox/browser/vector_icons/chrome_product.icon
 +++ b/components/omnibox/browser/vector_icons/chrome_product.icon
 @@ -1,48 +1,26 @@
@@ -8837,10 +8837,10 @@ index bf0481342d..cfaa780493 100644
 -R_CUBIC_TO, -1.1f, 0, -2.04f, 0.39f, -2.82f, 1.18f,
 -CUBIC_TO, 8.39f, 10.04f, 8, 10.98f, 8, 12.07f,
 -R_CUBIC_TO, 0, 1.1f, 0.39f, 2.04f, 1.18f, 2.82f,
-+MOVE_TO, 182.22, 136.61,
-+ARC_TO, 90, 90, 0, 1, 1, 182.22, 63.39,
-+LINE_TO, 136.54, 83.73,
-+ARC_TO, 40, 40, 0, 1, 0, 136.54, 116.27,
++MOVE_TO, 63.39, 182.22,
++ARC_TO, 90, 90, 0, 1, 1, 136.61, 182.22,
++LINE_TO, 116.27, 136.54,
++ARC_TO, 40, 40, 0, 1, 0, 83.73, 136.54,
  CLOSE,
 -MOVE_TO, 12, 18.07f,
 -R_CUBIC_TO, 0.22f, 0, 0.43f, -0.01f, 0.63f, -0.02f,
@@ -8854,8 +8854,8 @@ index bf0481342d..cfaa780493 100644
 -R_ARC_TO, 5.97f, 5.97f, 0, 0, 0, 2.15f, 2.18f,
 -R_CUBIC_TO, 0.92f, 0.55f, 1.93f, 0.82f, 3.05f, 0.82f,
 +MOVE_TO, 100, 100,
-+LINE_TO, 129.23, 86.98,
-+ARC_TO, 32, 32, 0, 1, 0, 129.23, 113.02,
++LINE_TO, 113.02, 129.23,
++ARC_TO, 32, 32, 0, 1, 0, 86.98, 129.23,
  CLOSE,
 -R_MOVE_TO, 0, -12,
 -R_CUBIC_TO, -1.33f, 0, -2.52f, 0.39f, -3.55f, 1.16f,
@@ -8865,11 +8865,11 @@ index bf0481342d..cfaa780493 100644
 -R_CUBIC_TO, 1.39f, -0.74f, 2.92f, -1.11f, 4.59f, -1.11f,
 -R_CUBIC_TO, 1.65f, 0, 3.17f, 0.36f, 4.55f, 1.09f,
 -ARC_TO, 10.17f, 10.17f, 0, 0, 1, 20, 6.07f,
-+MOVE_TO, 184.5, 62.38,
-+ARC_TO, 92.5, 92.5, 0, 0, 1, 184.5, 137.62,
-+ARC_TO, 2.5, 2.5, 0, 0, 1, 179.94, 135.59,
-+ARC_TO, 87.5, 87.5, 0, 0, 0, 179.94, 64.41,
-+ARC_TO, 2.5, 2.5, 0, 0, 1, 184.5, 62.38,
++MOVE_TO, 137.62, 184.5,
++ARC_TO, 92.5, 92.5, 0, 0, 1, 62.38, 184.5,
++ARC_TO, 2.5, 2.5, 0, 0, 1, 64.41, 179.94,
++ARC_TO, 87.5, 87.5, 0, 0, 0, 135.59, 179.94,
++ARC_TO, 2.5, 2.5, 0, 0, 1, 137.62, 184.5,
 +CLOSE,
 +MOVE_TO, 89, 170,
 +ARC_TO, 11, 11, 0, 0, 1, 111, 170,
@@ -8887,7 +8887,7 @@ index bf0481342d..cfaa780493 100644
 -R_ARC_TO, 6.07f, 6.07f, 0, 0, 0, -1.14f, -1.81f,
 -CLOSE
 diff --git a/components/omnibox/browser/vector_icons/product_chrome_refresh_old.icon b/components/omnibox/browser/vector_icons/product_chrome_refresh_old.icon
-index 5c35bda0d7..cfaa780493 100644
+index 5c35bda0d7..d0b5f6bbe6 100644
 --- a/components/omnibox/browser/vector_icons/product_chrome_refresh_old.icon
 +++ b/components/omnibox/browser/vector_icons/product_chrome_refresh_old.icon
 @@ -1,51 +1,26 @@
@@ -8911,10 +8911,10 @@ index 5c35bda0d7..cfaa780493 100644
 -R_ARC_TO, 2.49, 2.49, 0, 0, 0, -0.76, 1.82,
 +CANVAS_DIMENSIONS, 200,
 +FILL_RULE_NONZERO,
-+MOVE_TO, 182.22, 136.61,
-+ARC_TO, 90, 90, 0, 1, 1, 182.22, 63.39,
-+LINE_TO, 136.54, 83.73,
-+ARC_TO, 40, 40, 0, 1, 0, 136.54, 116.27,
++MOVE_TO, 63.39, 182.22,
++ARC_TO, 90, 90, 0, 1, 1, 136.61, 182.22,
++LINE_TO, 116.27, 136.54,
++ARC_TO, 40, 40, 0, 1, 0, 83.73, 136.54,
  CLOSE,
 -MOVE_TO, 7.5, 11.48,
 -R_CUBIC_TO, 0.14, 0, 0.28, 0, 0.41, -0.02,
@@ -8928,8 +8928,8 @@ index 5c35bda0d7..cfaa780493 100644
 -R_CUBIC_TO, 0.34, 0.59, 0.81, 1.07, 1.41, 1.43,
 -R_CUBIC_TO, 0.6, 0.36, 1.26, 0.54, 2.01, 0.54,
 +MOVE_TO, 100, 100,
-+LINE_TO, 129.23, 86.98,
-+ARC_TO, 32, 32, 0, 1, 0, 129.23, 113.02,
++LINE_TO, 113.02, 129.23,
++ARC_TO, 32, 32, 0, 1, 0, 86.98, 129.23,
  CLOSE,
 -R_MOVE_TO, 0, -7.87,
 -R_CUBIC_TO, -0.87, 0, -1.65, 0.25, -2.33, 0.77,
@@ -8941,11 +8941,11 @@ index 5c35bda0d7..cfaa780493 100644
 -ARC_TO, 6.66, 6.66, 0, 0, 1, 12.76, 3.6,
 -H_LINE_TO, 7.51,
 -R_LINE_TO, -0.01, 0.01,
-+MOVE_TO, 184.5, 62.38,
-+ARC_TO, 92.5, 92.5, 0, 0, 1, 184.5, 137.62,
-+ARC_TO, 2.5, 2.5, 0, 0, 1, 179.94, 135.59,
-+ARC_TO, 87.5, 87.5, 0, 0, 0, 179.94, 64.41,
-+ARC_TO, 2.5, 2.5, 0, 0, 1, 184.5, 62.38,
++MOVE_TO, 137.62, 184.5,
++ARC_TO, 92.5, 92.5, 0, 0, 1, 62.38, 184.5,
++ARC_TO, 2.5, 2.5, 0, 0, 1, 64.41, 179.94,
++ARC_TO, 87.5, 87.5, 0, 0, 0, 135.59, 179.94,
++ARC_TO, 2.5, 2.5, 0, 0, 1, 137.62, 184.5,
 +CLOSE,
 +MOVE_TO, 89, 170,
 +ARC_TO, 11, 11, 0, 0, 1, 111, 170,
@@ -8965,7 +8965,7 @@ index 5c35bda0d7..cfaa780493 100644
 -R_V_LINE_TO, 0.01,
 -CLOSE
 diff --git a/components/omnibox/browser/vector_icons/product_old.icon b/components/omnibox/browser/vector_icons/product_old.icon
-index 89336fe434..cfaa780493 100644
+index 89336fe434..d0b5f6bbe6 100644
 --- a/components/omnibox/browser/vector_icons/product_old.icon
 +++ b/components/omnibox/browser/vector_icons/product_old.icon
 @@ -1,91 +1,26 @@
@@ -8989,20 +8989,20 @@ index 89336fe434..cfaa780493 100644
 -LINE_TO, 8.82, 14.1,
 +CANVAS_DIMENSIONS, 200,
 +FILL_RULE_NONZERO,
-+MOVE_TO, 182.22, 136.61,
-+ARC_TO, 90, 90, 0, 1, 1, 182.22, 63.39,
-+LINE_TO, 136.54, 83.73,
-+ARC_TO, 40, 40, 0, 1, 0, 136.54, 116.27,
++MOVE_TO, 63.39, 182.22,
++ARC_TO, 90, 90, 0, 1, 1, 136.61, 182.22,
++LINE_TO, 116.27, 136.54,
++ARC_TO, 40, 40, 0, 1, 0, 83.73, 136.54,
 +CLOSE,
 +MOVE_TO, 100, 100,
-+LINE_TO, 129.23, 86.98,
-+ARC_TO, 32, 32, 0, 1, 0, 129.23, 113.02,
++LINE_TO, 113.02, 129.23,
++ARC_TO, 32, 32, 0, 1, 0, 86.98, 129.23,
 +CLOSE,
-+MOVE_TO, 184.5, 62.38,
-+ARC_TO, 92.5, 92.5, 0, 0, 1, 184.5, 137.62,
-+ARC_TO, 2.5, 2.5, 0, 0, 1, 179.94, 135.59,
-+ARC_TO, 87.5, 87.5, 0, 0, 0, 179.94, 64.41,
-+ARC_TO, 2.5, 2.5, 0, 0, 1, 184.5, 62.38,
++MOVE_TO, 137.62, 184.5,
++ARC_TO, 92.5, 92.5, 0, 0, 1, 62.38, 184.5,
++ARC_TO, 2.5, 2.5, 0, 0, 1, 64.41, 179.94,
++ARC_TO, 87.5, 87.5, 0, 0, 0, 135.59, 179.94,
++ARC_TO, 2.5, 2.5, 0, 0, 1, 137.62, 184.5,
 +CLOSE,
 +MOVE_TO, 89, 170,
 +ARC_TO, 11, 11, 0, 0, 1, 111, 170,
@@ -9085,7 +9085,7 @@ index 89336fe434..cfaa780493 100644
 -CLOSE,
 -NEW_PATH
 diff --git a/components/vector_icons/chromium/product.icon b/components/vector_icons/chromium/product.icon
-index 072c907d5b..cfaa780493 100644
+index 072c907d5b..d0b5f6bbe6 100644
 --- a/components/vector_icons/chromium/product.icon
 +++ b/components/vector_icons/chromium/product.icon
 @@ -1,30 +1,26 @@
@@ -9106,10 +9106,10 @@ index 072c907d5b..cfaa780493 100644
 -R_CUBIC_TO, 0.3, -2.1, 2.2, -3.8, 4.4, -3.8,
 +CANVAS_DIMENSIONS, 200,
 +FILL_RULE_NONZERO,
-+MOVE_TO, 182.22, 136.61,
-+ARC_TO, 90, 90, 0, 1, 1, 182.22, 63.39,
-+LINE_TO, 136.54, 83.73,
-+ARC_TO, 40, 40, 0, 1, 0, 136.54, 116.27,
++MOVE_TO, 63.39, 182.22,
++ARC_TO, 90, 90, 0, 1, 1, 136.61, 182.22,
++LINE_TO, 116.27, 136.54,
++ARC_TO, 40, 40, 0, 1, 0, 83.73, 136.54,
  CLOSE,
 -R_MOVE_TO, 0, 9,
 -R_CUBIC_TO, -1.7, 0, -3.1, -0.9, -3.9, -2.3,
@@ -9119,8 +9119,8 @@ index 072c907d5b..cfaa780493 100644
 -R_LINE_TO, 3.3, -5.7,
 -R_CUBIC_TO, -0.6, 0.2, -1.1, 0.3, -1.7, 0.3,
 +MOVE_TO, 100, 100,
-+LINE_TO, 129.23, 86.98,
-+ARC_TO, 32, 32, 0, 1, 0, 129.23, 113.02,
++LINE_TO, 113.02, 129.23,
++ARC_TO, 32, 32, 0, 1, 0, 86.98, 129.23,
  CLOSE,
 -R_MOVE_TO, 4.5, -4.5,
 -R_CUBIC_TO, 0, 0.8, -0.2, 1.6, -0.6, 2.2,
@@ -9130,11 +9130,11 @@ index 072c907d5b..cfaa780493 100644
 -R_CUBIC_TO, 0, -1.2, -0.2, -2.4, -0.6, -3.5,
 -R_H_LINE_TO, -6.6,
 -R_CUBIC_TO, 1, 0.8, 1.7, 2.1, 1.7, 3.5,
-+MOVE_TO, 184.5, 62.38,
-+ARC_TO, 92.5, 92.5, 0, 0, 1, 184.5, 137.62,
-+ARC_TO, 2.5, 2.5, 0, 0, 1, 179.94, 135.59,
-+ARC_TO, 87.5, 87.5, 0, 0, 0, 179.94, 64.41,
-+ARC_TO, 2.5, 2.5, 0, 0, 1, 184.5, 62.38,
++MOVE_TO, 137.62, 184.5,
++ARC_TO, 92.5, 92.5, 0, 0, 1, 62.38, 184.5,
++ARC_TO, 2.5, 2.5, 0, 0, 1, 64.41, 179.94,
++ARC_TO, 87.5, 87.5, 0, 0, 0, 135.59, 179.94,
++ARC_TO, 2.5, 2.5, 0, 0, 1, 137.62, 184.5,
 +CLOSE,
 +MOVE_TO, 89, 170,
 +ARC_TO, 11, 11, 0, 0, 1, 111, 170,
@@ -9142,7 +9142,7 @@ index 072c907d5b..cfaa780493 100644
  CLOSE,
 -CIRCLE, 12, 12, 3.5
 diff --git a/components/vector_icons/chromium/product_refresh.icon b/components/vector_icons/chromium/product_refresh.icon
-index 9551dab91d..cfaa780493 100644
+index 9551dab91d..d0b5f6bbe6 100644
 --- a/components/vector_icons/chromium/product_refresh.icon
 +++ b/components/vector_icons/chromium/product_refresh.icon
 @@ -1,79 +1,26 @@
@@ -9164,10 +9164,10 @@ index 9551dab91d..cfaa780493 100644
 -CUBIC_TO, 18, 8.68, 15.31, 5.99, 12, 5.99,
 -CUBIC_TO, 8.69, 5.99, 6, 8.68, 6, 11.99,
 -CUBIC_TO, 6, 15.31, 8.69, 17.99, 12, 17.99,
-+MOVE_TO, 182.22, 136.61,
-+ARC_TO, 90, 90, 0, 1, 1, 182.22, 63.39,
-+LINE_TO, 136.54, 83.73,
-+ARC_TO, 40, 40, 0, 1, 0, 136.54, 116.27,
++MOVE_TO, 63.39, 182.22,
++ARC_TO, 90, 90, 0, 1, 1, 136.61, 182.22,
++LINE_TO, 116.27, 136.54,
++ARC_TO, 40, 40, 0, 1, 0, 83.73, 136.54,
  CLOSE,
 -NEW_PATH,
 -FILL_RULE_NONZERO,
@@ -9187,8 +9187,8 @@ index 9551dab91d..cfaa780493 100644
 -CUBIC_TO, 18, 13.05, 17.72, 14.09, 17.2, 15,
 -V_LINE_TO, 15,
 +MOVE_TO, 100, 100,
-+LINE_TO, 129.23, 86.98,
-+ARC_TO, 32, 32, 0, 1, 0, 129.23, 113.02,
++LINE_TO, 113.02, 129.23,
++ARC_TO, 32, 32, 0, 1, 0, 86.98, 129.23,
  CLOSE,
 -NEW_PATH,
 -FILL_RULE_NONZERO,
@@ -9207,11 +9207,11 @@ index 9551dab91d..cfaa780493 100644
 -CUBIC_TO, 10.95, 18, 9.91, 17.73, 9, 17.2,
 -CUBIC_TO, 8.09, 16.67, 7.33, 15.91, 6.8, 15,
 -V_LINE_TO, 15,
-+MOVE_TO, 184.5, 62.38,
-+ARC_TO, 92.5, 92.5, 0, 0, 1, 184.5, 137.62,
-+ARC_TO, 2.5, 2.5, 0, 0, 1, 179.94, 135.59,
-+ARC_TO, 87.5, 87.5, 0, 0, 0, 179.94, 64.41,
-+ARC_TO, 2.5, 2.5, 0, 0, 1, 184.5, 62.38,
++MOVE_TO, 137.62, 184.5,
++ARC_TO, 92.5, 92.5, 0, 0, 1, 62.38, 184.5,
++ARC_TO, 2.5, 2.5, 0, 0, 1, 64.41, 179.94,
++ARC_TO, 87.5, 87.5, 0, 0, 0, 135.59, 179.94,
++ARC_TO, 2.5, 2.5, 0, 0, 1, 137.62, 184.5,
  CLOSE,
 -NEW_PATH,
 -FILL_RULE_NONZERO,
@@ -9246,7 +9246,7 @@ index 9551dab91d..cfaa780493 100644
  CLOSE,
 -NEW_PATH
 diff --git a/ui/message_center/vector_icons/chrome_product.icon b/ui/message_center/vector_icons/chrome_product.icon
-index bf0481342d..cfaa780493 100644
+index bf0481342d..d0b5f6bbe6 100644
 --- a/ui/message_center/vector_icons/chrome_product.icon
 +++ b/ui/message_center/vector_icons/chrome_product.icon
 @@ -1,48 +1,26 @@
@@ -9270,10 +9270,10 @@ index bf0481342d..cfaa780493 100644
 -R_CUBIC_TO, -1.1f, 0, -2.04f, 0.39f, -2.82f, 1.18f,
 -CUBIC_TO, 8.39f, 10.04f, 8, 10.98f, 8, 12.07f,
 -R_CUBIC_TO, 0, 1.1f, 0.39f, 2.04f, 1.18f, 2.82f,
-+MOVE_TO, 182.22, 136.61,
-+ARC_TO, 90, 90, 0, 1, 1, 182.22, 63.39,
-+LINE_TO, 136.54, 83.73,
-+ARC_TO, 40, 40, 0, 1, 0, 136.54, 116.27,
++MOVE_TO, 63.39, 182.22,
++ARC_TO, 90, 90, 0, 1, 1, 136.61, 182.22,
++LINE_TO, 116.27, 136.54,
++ARC_TO, 40, 40, 0, 1, 0, 83.73, 136.54,
  CLOSE,
 -MOVE_TO, 12, 18.07f,
 -R_CUBIC_TO, 0.22f, 0, 0.43f, -0.01f, 0.63f, -0.02f,
@@ -9287,8 +9287,8 @@ index bf0481342d..cfaa780493 100644
 -R_ARC_TO, 5.97f, 5.97f, 0, 0, 0, 2.15f, 2.18f,
 -R_CUBIC_TO, 0.92f, 0.55f, 1.93f, 0.82f, 3.05f, 0.82f,
 +MOVE_TO, 100, 100,
-+LINE_TO, 129.23, 86.98,
-+ARC_TO, 32, 32, 0, 1, 0, 129.23, 113.02,
++LINE_TO, 113.02, 129.23,
++ARC_TO, 32, 32, 0, 1, 0, 86.98, 129.23,
  CLOSE,
 -R_MOVE_TO, 0, -12,
 -R_CUBIC_TO, -1.33f, 0, -2.52f, 0.39f, -3.55f, 1.16f,
@@ -9298,11 +9298,11 @@ index bf0481342d..cfaa780493 100644
 -R_CUBIC_TO, 1.39f, -0.74f, 2.92f, -1.11f, 4.59f, -1.11f,
 -R_CUBIC_TO, 1.65f, 0, 3.17f, 0.36f, 4.55f, 1.09f,
 -ARC_TO, 10.17f, 10.17f, 0, 0, 1, 20, 6.07f,
-+MOVE_TO, 184.5, 62.38,
-+ARC_TO, 92.5, 92.5, 0, 0, 1, 184.5, 137.62,
-+ARC_TO, 2.5, 2.5, 0, 0, 1, 179.94, 135.59,
-+ARC_TO, 87.5, 87.5, 0, 0, 0, 179.94, 64.41,
-+ARC_TO, 2.5, 2.5, 0, 0, 1, 184.5, 62.38,
++MOVE_TO, 137.62, 184.5,
++ARC_TO, 92.5, 92.5, 0, 0, 1, 62.38, 184.5,
++ARC_TO, 2.5, 2.5, 0, 0, 1, 64.41, 179.94,
++ARC_TO, 87.5, 87.5, 0, 0, 0, 135.59, 179.94,
++ARC_TO, 2.5, 2.5, 0, 0, 1, 137.62, 184.5,
 +CLOSE,
 +MOVE_TO, 89, 170,
 +ARC_TO, 11, 11, 0, 0, 1, 111, 170,
@@ -9320,7 +9320,7 @@ index bf0481342d..cfaa780493 100644
 -R_ARC_TO, 6.07f, 6.07f, 0, 0, 0, -1.14f, -1.81f,
 -CLOSE
 diff --git a/ui/message_center/vector_icons/product_old.icon b/ui/message_center/vector_icons/product_old.icon
-index 7a9570e816..cfaa780493 100644
+index 7a9570e816..d0b5f6bbe6 100644
 --- a/ui/message_center/vector_icons/product_old.icon
 +++ b/ui/message_center/vector_icons/product_old.icon
 @@ -1,35 +1,26 @@
@@ -9341,10 +9341,10 @@ index 7a9570e816..cfaa780493 100644
 -R_H_LINE_TO, 36.25,
 +CANVAS_DIMENSIONS, 200,
 +FILL_RULE_NONZERO,
-+MOVE_TO, 182.22, 136.61,
-+ARC_TO, 90, 90, 0, 1, 1, 182.22, 63.39,
-+LINE_TO, 136.54, 83.73,
-+ARC_TO, 40, 40, 0, 1, 0, 136.54, 116.27,
++MOVE_TO, 63.39, 182.22,
++ARC_TO, 90, 90, 0, 1, 1, 136.61, 182.22,
++LINE_TO, 116.27, 136.54,
++ARC_TO, 40, 40, 0, 1, 0, 83.73, 136.54,
  CLOSE,
 -MOVE_TO, 48, 66,
 -R_CUBIC_TO, -6.8, 0, -12.4, -3.6, -15.6, -9.2,
@@ -9354,8 +9354,8 @@ index 7a9570e816..cfaa780493 100644
 -R_LINE_TO, 13.2, -22.8,
 -R_CUBIC_TO, -2.4, 0.8, -4.4, 1.2, -6.8, 1.2,
 +MOVE_TO, 100, 100,
-+LINE_TO, 129.23, 86.98,
-+ARC_TO, 32, 32, 0, 1, 0, 129.23, 113.02,
++LINE_TO, 113.02, 129.23,
++ARC_TO, 32, 32, 0, 1, 0, 86.98, 129.23,
  CLOSE,
 -R_MOVE_TO, 18, -18,
 -R_CUBIC_TO, 0, -5.6, -4, -11.8, -8, -15,
@@ -9365,11 +9365,11 @@ index 7a9570e816..cfaa780493 100644
 -R_H_LINE_TO, -2.4,
 -R_LINE_TO, 18, -31.2,
 -R_CUBIC_TO, 1.6, -2.4, 2.4, -5.6, 2.4, -8.8,
-+MOVE_TO, 184.5, 62.38,
-+ARC_TO, 92.5, 92.5, 0, 0, 1, 184.5, 137.62,
-+ARC_TO, 2.5, 2.5, 0, 0, 1, 179.94, 135.59,
-+ARC_TO, 87.5, 87.5, 0, 0, 0, 179.94, 64.41,
-+ARC_TO, 2.5, 2.5, 0, 0, 1, 184.5, 62.38,
++MOVE_TO, 137.62, 184.5,
++ARC_TO, 92.5, 92.5, 0, 0, 1, 62.38, 184.5,
++ARC_TO, 2.5, 2.5, 0, 0, 1, 64.41, 179.94,
++ARC_TO, 87.5, 87.5, 0, 0, 0, 135.59, 179.94,
++ARC_TO, 2.5, 2.5, 0, 0, 1, 137.62, 184.5,
 +CLOSE,
 +MOVE_TO, 89, 170,
 +ARC_TO, 11, 11, 0, 0, 1, 111, 170,
