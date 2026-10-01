@@ -992,14 +992,57 @@ index 8afcf57ba4..0f12ae67f2 100644
          }
        }
 diff --git a/services/data_decoder/provenance_manifest_parser.cc b/services/data_decoder/provenance_manifest_parser.cc
-index c70cb25d76..ef915138f7 100644
+index c70cb25d76..a26a89ed66 100644
 --- a/services/data_decoder/provenance_manifest_parser.cc
 +++ b/services/data_decoder/provenance_manifest_parser.cc
-@@ -98,7 +98,11 @@ std::vector<uint8_t> CollectPngCaBx(const uint8_t* data, size_t size,
+@@ -98,7 +98,54 @@ std::vector<uint8_t> CollectPngCaBx(const uint8_t* data, size_t size,
    return out;
  }
  
 -// Depth-limited JUMBF box walk collecting every "json" content-box payload.
++// Collects C2PA chunk payloads (C2PA JUMBF carrier in WebP RIFF).
++// WebP is a RIFF container: RIFF <size> WEBP, then chunks of
++// <FourCC> <u32le size> <payload (word-aligned)>. The C2PA chunk carries
++// an 8-byte "C2PA" signature box header followed by the JUMBF box tree.
++// Series 0016 fixup 7: WebP RIFF C2PA support.
++std::vector<uint8_t> CollectWebPC2PA(const uint8_t* data, size_t size,
++                                     size_t* chunks) {
++  std::vector<uint8_t> out;
++  *chunks = 0;
++  if (size < 12) {
++    return out;
++  }
++  if (data[0] != 'R' || data[1] != 'I' || data[2] != 'F' || data[3] != 'F' ||
++      data[8] != 'W' || data[9] != 'E' || data[10] != 'B' ||
++      data[11] != 'P') {
++    return out;
++  }
++  size_t off = 12;
++  while (off + 8 <= size) {
++    const uint8_t* fourcc = data + off;
++    const uint32_t chunk_size = static_cast<uint32_t>(data[off + 4]) |
++                                (static_cast<uint32_t>(data[off + 5]) << 8) |
++                                (static_cast<uint32_t>(data[off + 6]) << 16) |
++                                (static_cast<uint32_t>(data[off + 7]) << 24);
++    if (off + 8 + chunk_size > size) {
++      break;
++    }
++    if (fourcc[0] == 'C' && fourcc[1] == '2' && fourcc[2] == 'P' &&
++        fourcc[3] == 'A') {
++      // The C2PA chunk payload starts with an 8-byte signature box
++      // ("C2PA" + 4 bytes of metadata) followed by the JUMBF data.
++      if (chunk_size > 8) {
++        out.insert(out.end(), data + off + 8 + 8,
++                   data + off + 8 + chunk_size);
++        (*chunks)++;
++      }
++      break;
++    }
++    off += 8 + chunk_size + (chunk_size % 2);  // word-aligned
++  }
++  return out;
++}
++
 +// Depth-limited JUMBF box walk collecting every "json" and "cbor"
 +// content-box payload. CBOR is the C2PA standard binary serialization —
 +// the c2pa-rs SDK and Adobe tools emit CBOR manifests, not JSON.
@@ -1008,7 +1051,7 @@ index c70cb25d76..ef915138f7 100644
  void WalkBoxes(const uint8_t* p, size_t size, int depth,
                 std::vector<std::string>* json_payloads) {
    if (depth > 8) {
-@@ -111,7 +115,7 @@ void WalkBoxes(const uint8_t* p, size_t size, int depth,
+@@ -111,7 +158,7 @@ void WalkBoxes(const uint8_t* p, size_t size, int depth,
        return;  // implausible box: stop walking
      }
      const uint8_t* type = p + off + 4;
@@ -1017,7 +1060,21 @@ index c70cb25d76..ef915138f7 100644
        json_payloads->emplace_back(reinterpret_cast<const char*>(p + off + 8),
                                    len - 8);
      } else if (FourCc(type, "jumd") || FourCc(type, "jumb")) {
-@@ -203,8 +207,11 @@ ProvenanceManifest InspectProvenance(const uint8_t* data, size_t size) {
+@@ -172,6 +219,13 @@ ProvenanceManifest InspectProvenance(const uint8_t* data, size_t size) {
+     jumbf = CollectPngCaBx(data, size, &chunks);
+     m.detail = "png caBX chunks=" + std::to_string(chunks) +
+                " jumbf_bytes=" + std::to_string(jumbf.size());
++  } else if (size >= 12 && FourCc(data, "RIFF") &&
++             FourCc(data + 8, "WEBP")) {
++    // Series 0016 fixup 7: WebP RIFF C2PA support.
++    size_t chunks = 0;
++    jumbf = CollectWebPC2PA(data, size, &chunks);
++    m.detail = "webp C2PA chunks=" + std::to_string(chunks) +
++               " jumbf_bytes=" + std::to_string(jumbf.size());
+   } else {
+     m.detail = "container not recognized";
+     return m;
+@@ -203,8 +257,11 @@ ProvenanceManifest InspectProvenance(const uint8_t* data, size_t size) {
      // Series 0008: flag AI-generation claims. One substring check covers
      // both the action form (c2pa.actions/trainedAlgorithmicMedia) and the
      // digital_source_type form
