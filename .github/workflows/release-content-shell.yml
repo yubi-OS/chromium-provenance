@@ -4,8 +4,12 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Release tag (e.g. content-shell-v0.1.1)'
+        description: 'Release tag (e.g. content-shell-v0.1.1 or antimony-v153.0.8010.36)'
         required: true
+      target:
+        description: 'Release target: content-shell or antimony-deb'
+        required: false
+        default: 'content-shell'
 
 permissions:
   contents: write
@@ -20,6 +24,7 @@ jobs:
     timeout-minutes: 60
     steps:
       - name: Package bundle (reproducible tar)
+        if: inputs.target != 'antimony-deb'
         run: |
           set -euo pipefail
           cd /home/ubuntu/chromium-build/src/out/arm64-qual
@@ -50,12 +55,63 @@ jobs:
             -cf bundle.tar.zst -C /tmp release-bundle
           sha256sum bundle.tar.zst | tee bundle.sha256
 
+      - name: Stage antimony deb + sha256
+        if: inputs.target == 'antimony-deb'
+        run: |
+          set -euo pipefail
+          DEB=/home/ubuntu/chromium-build/src/out/arm64-release/antimony-stable_153.0.8010.36-1_arm64.deb
+          test -f "$DEB"
+          cp "$DEB" /tmp/antimony-stable_153.0.8010.36-1_arm64.deb
+          sha256sum /tmp/antimony-stable_153.0.8010.36-1_arm64.deb | tee /tmp/deb.sha256
+
       - name: Create draft release with asset attached
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           TAG="${{ inputs.tag }}"
+          if [ "${{ inputs.target }}" = "antimony-deb" ]; then
+            DIGEST=$(cut -d' ' -f1 /tmp/deb.sha256)
+            SIZE=$(stat -c %s /tmp/antimony-stable_153.0.8010.36-1_arm64.deb)
+            {
+              echo "First Antimony release — the provenance-gated Chromium fork, rebranded end-to-end."
+              echo ""
+              echo '**package:** antimony-stable (Debian package format 2.0, arm64)'
+              echo '**built-from:** yubi-OS/chromium fork, provenance-gate branch e45ecdc355, overlay patches 0001-0019'
+              echo '**built-on:** ubuntu HIGH-MEM aarch64 (Snapdragon X1E80100), non-component release build (is_component_build = false)'
+              echo ""
+              echo "## Package digest (immutable-build discipline: verify before use)"
+              echo ""
+              echo '```'
+              echo "$DIGEST  antimony-stable_153.0.8010.36-1_arm64.deb"
+              echo "$SIZE  antimony-stable_153.0.8010.36-1_arm64.deb"
+              echo '```'
+              echo ""
+              echo "## Install"
+              echo ""
+              echo '```'
+              echo "sudo dpkg -i antimony-stable_153.0.8010.36-1_arm64.deb"
+              echo '```'
+              echo ""
+              echo "Installs to /opt/antimony, menu entry \"Antimony Web Browser\"."
+              echo "Unsigned for v0.1 — the digest above is the integrity anchor."
+            } > /tmp/notes.md
+            # 1. draft (invisible, mutable)  2. asset attaches at creation
+            # 3. NO publish — left as draft for owner review
+            gh release create "$TAG" \
+              --repo yubi-OS/chromium-provenance \
+              --draft \
+              --target main \
+              --prerelease \
+              --title "Antimony $TAG" \
+              --notes-file /tmp/notes.md \
+              /tmp/antimony-stable_153.0.8010.36-1_arm64.deb
+            gh release view "$TAG" --repo yubi-OS/chromium-provenance \
+              --json isDraft,assets -q '"draft: \(.isDraft)", (.assets[] | "asset: \(.name) \(.size) bytes")'
+            echo "deb digest: $DIGEST"
+            echo "draft left unpublished for owner review"
+            exit 0
+          fi
           DIGEST=$(cut -d' ' -f1 /tmp/bundle.sha256)
           SIZE=$(stat -c %s /tmp/bundle.tar.zst)
           {
