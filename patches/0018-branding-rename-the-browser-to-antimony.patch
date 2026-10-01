@@ -8536,6 +8536,79 @@ z0&R{F>MRj)>H2I{s?J}VjhnCfi{XtoK69$?=`+8in@>nZaNpmmGJHZSPqv?SNjGPC
 znQqlCqfV8suZquLCsY~wELsFdMQ^S0Rc)z$&eP7r8*ly(1f?xbRh|*b00000NkvXX
 Hu0mjf2Vv2I
 
+diff --git a/chrome/app/vector_icons/chrome_product.icon b/chrome/app/vector_icons/chrome_product.icon
+index 31cb949b87..cfaa780493 100644
+--- a/chrome/app/vector_icons/chrome_product.icon
++++ b/chrome/app/vector_icons/chrome_product.icon
+@@ -1,47 +1,26 @@
+-// Copyright 2026 The Chromium Authors
+-// Use of this source code is governed by a BSD-style license that can be
+-// found in the LICENSE file.
++// Copyright 2026 The yubi-OS Authors. BSD-3-Clause (matches Chromium).
++// Antimony product mark (mark 2c kit, mono silhouette) for the omnibox
++// secure chip on chrome:// pages. Geometry derived analytically from
++// master/product_logo_mono_black.svg (mask-cut ring + eye + swoosh + dot).
+ 
+-CANVAS_DIMENSIONS, 16,
++CANVAS_DIMENSIONS, 200,
+ FILL_RULE_NONZERO,
+-MOVE_TO, 6.23f, 9.79f,
+-R_ARC_TO, 2.41f, 2.41f, 0, 0, 0, 1.77f, 0.73f,
+-R_CUBIC_TO, 0.7f, 0, 1.29f, -0.24f, 1.77f, -0.73f,
+-R_ARC_TO, 2.41f, 2.41f, 0, 0, 0, 0.73f, -1.77f,
+-R_CUBIC_TO, 0, -0.69f, -0.24f, -1.28f, -0.73f, -1.77f,
+-ARC_TO, 2.41f, 2.41f, 0, 0, 0, 8, 5.52f,
+-R_CUBIC_TO, -0.69f, 0, -1.28f, 0.24f, -1.77f, 0.73f,
+-R_ARC_TO, 2.41f, 2.41f, 0, 0, 0, -0.73f, 1.77f,
+-R_CUBIC_TO, 0, 0.7f, 0.24f, 1.29f, 0.73f, 1.77f,
++MOVE_TO, 182.22, 136.61,
++ARC_TO, 90, 90, 0, 1, 1, 182.22, 63.39,
++LINE_TO, 136.54, 83.73,
++ARC_TO, 40, 40, 0, 1, 0, 136.54, 116.27,
+ CLOSE,
+-MOVE_TO, 8, 11.77f,
+-R_CUBIC_TO, 0.13f, 0, 0.25f, 0, 0.39f, -0.01f,
+-R_CUBIC_TO, 0.14f, -0.01f, 0.26f, -0.03f, 0.39f, -0.06f,
+-LINE_TO, 7.09f, 14.59f,
+-R_CUBIC_TO, -1.66f, -0.18f, -3.03f, -0.9f, -4.11f, -2.16f,
+-R_CUBIC_TO, -1.08f, -1.26f, -1.62f, -2.73f, -1.62f, -4.42f,
+-R_ARC_TO, 6.54f, 6.54f, 0, 0, 1, 0.66f, -2.86f,
+-R_LINE_TO, 2.77f, 4.73f,
+-R_CUBIC_TO, 0.33f, 0.59f, 0.77f, 1.05f, 1.35f, 1.38f,
+-R_CUBIC_TO, 0.58f, 0.33f, 1.2f, 0.5f, 1.87f, 0.5f,
++MOVE_TO, 100, 100,
++LINE_TO, 129.23, 86.98,
++ARC_TO, 32, 32, 0, 1, 0, 129.23, 113.02,
+ CLOSE,
+-MOVE_TO, 8, 4.27f,
+-R_ARC_TO, 3.56f, 3.56f, 0, 0, 0, -2.2f, 0.73f,
+-R_ARC_TO, 3.81f, 3.81f, 0, 0, 0, -1.34f, 1.88f,
+-R_LINE_TO, -1.69f, -2.93f,
+-R_ARC_TO, 6.2f, 6.2f, 0, 0, 1, 2.29f, -1.9f,
+-ARC_TO, 6.65f, 6.65f, 0, 0, 1, 8, 1.38f,
+-R_CUBIC_TO, 1.09f, 0, 2.13f, 0.26f, 3.09f, 0.77f,
+-R_ARC_TO, 6.72f, 6.72f, 0, 0, 1, 2.38f, 2.12f,
++MOVE_TO, 184.5, 62.38,
++ARC_TO, 92.5, 92.5, 0, 0, 1, 184.5, 137.62,
++ARC_TO, 2.5, 2.5, 0, 0, 1, 179.94, 135.59,
++ARC_TO, 87.5, 87.5, 0, 0, 0, 179.94, 64.41,
++ARC_TO, 2.5, 2.5, 0, 0, 1, 184.5, 62.38,
++CLOSE,
++MOVE_TO, 89, 170,
++ARC_TO, 11, 11, 0, 0, 1, 111, 170,
++ARC_TO, 11, 11, 0, 0, 1, 89, 170,
+ CLOSE,
+-R_MOVE_TO, 6.16f, 1.25f,
+-R_CUBIC_TO, 0.17f, 0.41f, 0.3f, 0.82f, 0.37f, 1.23f,
+-R_ARC_TO, 6.8f, 6.8f, 0, 0, 1, 0.12f, 1.26f,
+-R_CUBIC_TO, 0, 1.79f, -0.58f, 3.29f, -1.73f, 4.5f,
+-R_CUBIC_TO, -1.15f, 1.22f, -2.62f, 1.93f, -4.41f, 2.12f,
+-R_LINE_TO, 2.71f, -4.75f,
+-R_CUBIC_TO, 0.16f, -0.29f, 0.29f, -0.59f, 0.38f, -0.9f,
+-R_ARC_TO, 3.32f, 3.32f, 0, 0, 0, 0.14f, -0.97f,
+-R_CUBIC_TO, 0, -0.46f, -0.09f, -0.91f, -0.26f, -1.34f,
+-R_ARC_TO, 4.21f, 4.21f, 0, 0, 0, -0.71f, -1.16f,
+-CLOSE
 diff --git a/chrome/browser/devtools/device/android_device_info_query.cc b/chrome/browser/devtools/device/android_device_info_query.cc
 index 3f9edef890..d70d508933 100644
 --- a/chrome/browser/devtools/device/android_device_info_query.cc
@@ -8602,6 +8675,221 @@ index 7ff06ccae6..3112717d8d 100644
      type = DefaultBrowserType::kChrome;
    } else if (name.contains(u"Edge")) {
      type = DefaultBrowserType::kEdge;
+diff --git a/components/components_chromium_strings.grd b/components/components_chromium_strings.grd
+index 154a930642..4c8408f9d5 100644
+--- a/components/components_chromium_strings.grd
++++ b/components/components_chromium_strings.grd
+@@ -196,7 +196,7 @@
+       <if expr="not is_android and not is_ios">
+         <message name="IDS_ERRORPAGES_SUGGESTION_NETWORK_PREDICTION_BODY" desc="When a page fails to load, sometimes we suggest disabling predicting network actions.  These are details below a header for non Android devices.">
+           Go to
+-          the Chromium menu &gt;
++          the Antimony menu &gt;
+           <ph name="SETTINGS_TITLE">&lt;span&gt;$1&lt;/span&gt;<ex>Settings</ex></ph>
+           &gt;
+           <ph name="ADVANCED_TITLE">&lt;span&gt;$2&lt;/span&gt;<ex>Under the Hood</ex></ph>
+@@ -205,12 +205,12 @@
+           again for improved performance.
+         </message>
+         <message name="IDS_ERRORPAGES_SUGGESTION_FIREWALL_CONFIG_HEADER" desc="When a webpage fails to load, in some cases we suggest reconfiguring the firewall.  This is a header above some details.">
+-          Allow Chromium to access the network in your firewall or antivirus
++          Allow Antimony to access the network in your firewall or antivirus
+           settings.
+         </message>
+       </if>
+       <message name="IDS_ERRORPAGES_SUMMARY_BLOCKED_BY_CLIENT" desc="Summary in the error page when a request is blocked by the browser.">
+-        This page has been blocked by Chromium
++        This page has been blocked by Antimony
+       </message>
+       <if expr="is_macosx">
+         <message name="IDS_ERRORPAGES_SUGGESTION_PROXY_DISABLE_PLATFORM" desc="macOS instructions for disabling use of a proxy server.">
+@@ -223,7 +223,7 @@
+       <if expr="is_linux">
+         <message name="IDS_ERRORPAGES_SUGGESTION_PROXY_DISABLE_PLATFORM" desc="Linux instructions for disabling use of a proxy server.">
+           Go to
+-          the Chromium menu &gt;
++          the Antimony menu &gt;
+           <ph name="SETTINGS_TITLE">&lt;span&gt;$1&lt;/span&gt;<ex>Settings</ex></ph>
+           &gt;
+           <ph name="SYSTEM_TITLE">&lt;span&gt;$2&lt;/span&gt;<ex>System</ex></ph>
+@@ -235,7 +235,7 @@
+       <if expr="is_win">
+         <message name="IDS_ERRORPAGES_SUGGESTION_PROXY_DISABLE_PLATFORM" desc="Windows instructions for disabling use of a proxy server.">
+           Go to
+-          the Chromium menu &gt;
++          the Antimony menu &gt;
+           <ph name="SETTINGS_TITLE">&lt;span&gt;$1&lt;/span&gt;<ex>Settings</ex></ph>
+           &gt;
+           <ph name="SYSTEM_TITLE">&lt;span&gt;$2&lt;/span&gt;<ex>System</ex></ph>
+@@ -246,17 +246,17 @@
+           and deselect &quot;Automatically detect settings&quot;.
+         </message>
+         <message name="IDS_PAYMENTS_AUTOFILL_MANDATORY_REAUTH_PROMPT" desc="Message to be displayed to the user in the device authentication prompt when they click on the mandatory auth toggle on the Payments settings page, irrespective to enable or disable it. When mandatory auth toggle is enabled, we would authenticate the user before autofilling in the payment details.">
+-          Chromium is trying to modify settings for filling payment methods.
++          Antimony is trying to modify settings for filling payment methods.
+         </message>
+         <message name="IDS_PAYMENTS_AUTOFILL_EDIT_CARD_MANDATORY_REAUTH_PROMPT" desc="Message to be displayed to the user in the device authentication prompt when they try to edit a local card on the Payments settings page if the mandatory auth toggle is enabled. If the user auth was succesful, we would then show the edit card dialog.">
+-          Chromium is trying to edit payment methods.
++          Antimony is trying to edit payment methods.
+         </message>
+       </if>
+ 
+       <!-- About Flags UI -->
+       <if expr="not is_chromeos">
+-        <message name="IDS_FLAGS_UI_RELAUNCH_NOTICE" desc="Notifies the user that they need to relaunch Chromium. Shown next to a button that says 'Relaunch Now'.">
+-          Your changes will take effect the next time you relaunch Chromium.
++        <message name="IDS_FLAGS_UI_RELAUNCH_NOTICE" desc="Notifies the user that they need to relaunch Antimony. Shown next to a button that says 'Relaunch Now'.">
++          Your changes will take effect the next time you relaunch Antimony.
+         </message>
+       </if>
+       <if expr="is_chromeos">
+@@ -267,12 +267,12 @@
+ 
+       <!-- chrome://crashes strings -->
+       <message name="IDS_CRASH_DISABLED_MESSAGE" desc="The explanatory message for chrome://crashes when crash reporting is disabled">
+-        Crash reporting is not available in Chromium.
++        Crash reporting is not available in Antimony.
+       </message>
+ 
+       <!-- Version UI -->
+-      <message name="IDS_SHORT_PRODUCT_LOGO_ALT_TEXT" desc="Alt text for the Chromium logo image.">
+-        Chromium logo
++      <message name="IDS_SHORT_PRODUCT_LOGO_ALT_TEXT" desc="Alt text for the Antimony logo image.">
++        Antimony logo
+       </message>
+ 
+       <message name="IDS_VERSION_UI_LICENSE" desc="The label below the copyright message, containing the URLs.">
+@@ -280,7 +280,7 @@
+       </message>
+ 
+       <if expr="is_chromeos">
+-        <message name="IDS_VERSION_UI_LICENSE_CHROMIUM" desc="The label below the copyright message, containing the link to the Chromium project.">
++        <message name="IDS_VERSION_UI_LICENSE_CHROMIUM" desc="The label below the copyright message, containing the link to the Antimony project.">
+           Chromium is made possible by the <ph name="BEGIN_LINK_CHROMIUM">&lt;a target="_blank" href="$1"&gt;</ph>Chromium<ph name="END_LINK_CHROMIUM">&lt;/a&gt;</ph> open source project.
+         </message>
+ 
+@@ -298,36 +298,36 @@
+         </then>
+         <else>
+           <message name="IDS_PAGE_INFO_INTERNAL_PAGE" desc="Message to display in the page info bubble when the page you are on is a chrome:// page or about:something.">
+-            You're viewing a secure Chromium page
++            You're viewing a secure Antimony page
+           </message>
+         </else>
+       </if>
+ 
+       <!-- Session Crash -->
+       <message name="IDS_SESSION_CRASHED_VIEW_MESSAGE" desc="Message shown when the last session didn't exit cleanly.">
+-        Chromium didn't shut down correctly.
++        Antimony didn't shut down correctly.
+       </message>
+ 
+       <!-- Device Chooser Prompt -->
+       <message name="IDS_BLUETOOTH_DEVICE_CHOOSER_AUTHORIZE_BLUETOOTH" desc="Text shown in the Chooser when browser does not have Bluetooth permission. The '&#10;' is a newline character to force the desired line wrapping.">
+-        Chromium needs Bluetooth access to continue &#10; pairing. <ph name="IDS_BLUETOOTH_DEVICE_CHOOSER_AUTHORIZE_BLUETOOTH_LINK">$1<ex>Open Preferences</ex></ph>
++        Antimony needs Bluetooth access to continue &#10; pairing. <ph name="IDS_BLUETOOTH_DEVICE_CHOOSER_AUTHORIZE_BLUETOOTH_LINK">$1<ex>Open Preferences</ex></ph>
+       </message>
+ 
+       <!-- Internal debug pages disabled interstitial. -->
+       <message name="IDS_INTERNAL_DEBUG_PAGES_DISABLED_BODY" desc="This is the text, with a link, that appears below the heading for the page that appears when the user attempts to load an internal developer debugging page when such pages are disabled by a pref. It instructs the user on how to enable the pref if they wish.">
+-        These pages are intended for use by Chromium developers, and may not be actively maintained or tested. To enable them, navigate to <ph name="BEGIN_LINK">&lt;a href="$1"&gt;</ph>chrome://chrome-urls<ph name="LINK_END">&lt;/a&gt;</ph>, click the button to enable debug pages, and then navigate to this page again.
++        These pages are intended for use by Antimony developers, and may not be actively maintained or tested. To enable them, navigate to <ph name="BEGIN_LINK">&lt;a href="$1"&gt;</ph>chrome://chrome-urls<ph name="LINK_END">&lt;/a&gt;</ph>, click the button to enable debug pages, and then navigate to this page again.
+       </message>
+ 
+       <!-- Desktop-to-Mobile Promo Notifications -->
+       <if expr="not is_android">
+         <message name="IDS_IOS_DESKTOP_PASSWORD_PROMO_NOTIFICATION_TITLE" desc="The title for the iOS desktop Password promo notification.">
+-          Chromium Tip: Save Passwords
++          Antimony Tip: Save Passwords
+         </message>
+         <message name="IDS_IOS_DESKTOP_SAFE_BROWSING_PROMO_NOTIFICATION_TITLE" desc="The title for the iOS desktop Enhanced Safe Browsing promo notification.">
+-          Chromium Tip: Enhanced Safe Browsing
++          Antimony Tip: Enhanced Safe Browsing
+         </message>
+         <message name="IDS_IOS_DESKTOP_LENS_PROMO_NOTIFICATION_TITLE" desc="The title for the iOS desktop Lens promo notification.">
+-          Chromium Tip: Search With Lens
++          Antimony Tip: Search With Lens
+         </message>
+       </if>
+     </messages>
+diff --git a/components/omnibox/browser/vector_icons/product_chrome_refresh_old.icon b/components/omnibox/browser/vector_icons/product_chrome_refresh_old.icon
+index 5c35bda0d7..cfaa780493 100644
+--- a/components/omnibox/browser/vector_icons/product_chrome_refresh_old.icon
++++ b/components/omnibox/browser/vector_icons/product_chrome_refresh_old.icon
+@@ -1,51 +1,26 @@
+-// Copyright 2023 The Chromium Authors
+-// Use of this source code is governed by a BSD-style license that can be
+-// found in the LICENSE file.
++// Copyright 2026 The yubi-OS Authors. BSD-3-Clause (matches Chromium).
++// Antimony product mark (mark 2c kit, mono silhouette) for the omnibox
++// secure chip on chrome:// pages. Geometry derived analytically from
++// master/product_logo_mono_black.svg (mask-cut ring + eye + swoosh + dot).
+ 
+-CANVAS_DIMENSIONS, 15,
+-MOVE_TO, 4.92, 7.5,
+-R_CUBIC_TO, 0, 0.71, 0.25, 1.31, 0.76, 1.82,
+-R_CUBIC_TO, 0.51, 0.51, 1.12, 0.76, 1.82, 0.76,
+-R_CUBIC_TO, 0.7, 0, 1.31, -0.25, 1.82, -0.76,
+-R_CUBIC_TO, 0.51, -0.51, 0.76, -1.12, 0.76, -1.82,
+-R_CUBIC_TO, 0, -0.7, -0.25, -1.31, -0.76, -1.82,
+-R_ARC_TO, 2.49, 2.49, 0, 0, 0, -1.82, -0.76,
+-R_CUBIC_TO, -0.7, 0, -1.31, 0.25, -1.82, 0.76,
+-R_ARC_TO, 2.49, 2.49, 0, 0, 0, -0.76, 1.82,
++CANVAS_DIMENSIONS, 200,
++FILL_RULE_NONZERO,
++MOVE_TO, 182.22, 136.61,
++ARC_TO, 90, 90, 0, 1, 1, 182.22, 63.39,
++LINE_TO, 136.54, 83.73,
++ARC_TO, 40, 40, 0, 1, 0, 136.54, 116.27,
+ CLOSE,
+-MOVE_TO, 7.5, 11.48,
+-R_CUBIC_TO, 0.14, 0, 0.28, 0, 0.41, -0.02,
+-R_CUBIC_TO, 0.13, -0.01, 0.26, -0.04, 0.39, -0.07,
+-LINE_TO, 6.77, 14.06,
+-R_CUBIC_TO, -1.65, -0.19, -3.04, -0.89, -4.15, -2.12,
+-CUBIC_TO, 1.5, 10.71, 0.94, 9.24, 0.94, 7.55,
+-R_CUBIC_TO, 0, -0.46, 0.05, -0.9, 0.13, -1.33,
+-R_CUBIC_TO, 0.08, -0.44, 0.22, -0.85, 0.39, -1.25,
+-R_LINE_TO, 2.63, 4.55,
+-R_CUBIC_TO, 0.34, 0.59, 0.81, 1.07, 1.41, 1.43,
+-R_CUBIC_TO, 0.6, 0.36, 1.26, 0.54, 2.01, 0.54,
++MOVE_TO, 100, 100,
++LINE_TO, 129.23, 86.98,
++ARC_TO, 32, 32, 0, 1, 0, 129.23, 113.02,
+ CLOSE,
+-R_MOVE_TO, 0, -7.87,
+-R_CUBIC_TO, -0.87, 0, -1.65, 0.25, -2.33, 0.77,
+-R_ARC_TO, 3.95, 3.95, 0, 0, 0, -1.42, 1.94,
+-LINE_TO, 2.21, 3.66,
+-R_ARC_TO, 6.79, 6.79, 0, 0, 1, 2.27, -1.94,
+-CUBIC_TO, 5.4, 1.22, 6.4, 0.98, 7.5, 0.98,
+-R_CUBIC_TO, 1.1, 0, 2.08, 0.24, 2.99, 0.72,
+-ARC_TO, 6.66, 6.66, 0, 0, 1, 12.76, 3.6,
+-H_LINE_TO, 7.51,
+-R_LINE_TO, -0.01, 0.01,
++MOVE_TO, 184.5, 62.38,
++ARC_TO, 92.5, 92.5, 0, 0, 1, 184.5, 137.62,
++ARC_TO, 2.5, 2.5, 0, 0, 1, 179.94, 135.59,
++ARC_TO, 87.5, 87.5, 0, 0, 0, 179.94, 64.41,
++ARC_TO, 2.5, 2.5, 0, 0, 1, 184.5, 62.38,
++CLOSE,
++MOVE_TO, 89, 170,
++ARC_TO, 11, 11, 0, 0, 1, 111, 170,
++ARC_TO, 11, 11, 0, 0, 1, 89, 170,
+ CLOSE,
+-R_MOVE_TO, 6.01, 1.31,
+-R_CUBIC_TO, 0.19, 0.4, 0.32, 0.83, 0.41, 1.27,
+-R_CUBIC_TO, 0.09, 0.44, 0.15, 0.89, 0.15, 1.36,
+-R_CUBIC_TO, 0, 1.7, -0.55, 3.16, -1.68, 4.38,
+-R_CUBIC_TO, -1.11, 1.23, -2.47, 1.93, -4.1, 2.13,
+-R_LINE_TO, 2.63, -4.55,
+-R_CUBIC_TO, 0.17, -0.28, 0.29, -0.59, 0.38, -0.92,
+-R_CUBIC_TO, 0.09, -0.34, 0.15, -0.69, 0.15, -1.05,
+-R_CUBIC_TO, 0, -0.52, -0.09, -0.99, -0.28, -1.42,
+-R_ARC_TO, 3.96, 3.96, 0, 0, 0, -0.74, -1.2,
+-R_H_LINE_TO, 3.08,
+-R_V_LINE_TO, 0.01,
+-CLOSE
 diff --git a/ui/webui/resources/images/chrome_logo_dark.svg b/ui/webui/resources/images/chrome_logo_dark.svg
 index 19ba047be4..95c4b31dd9 100644
 --- a/ui/webui/resources/images/chrome_logo_dark.svg
