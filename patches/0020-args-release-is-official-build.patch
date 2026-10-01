@@ -1,0 +1,28 @@
+diff --git a/docs/arm64-release-args.gn b/docs/arm64-release-args.gn
+new file mode 100644
+--- /dev/null
++++ b/docs/arm64-release-args.gn
+@@ -0,0 +1,17 @@
++# Release build args for Antimony arm64 (chromium-provenance series)
++# Copy to out/arm64-release/args.gn before running gn gen.
++#
++# is_official_build=true enables binary stripping + optimization,
++# producing a ~110-120 MB deb instead of the 573 MB unstripped v0.1
++# (antimony-v153.0.8010.36 shipped without this flag).
++#
++# NOTE: is_official_build=true may enable LTO which significantly
++# increases build time. Verify the build completes before relying
++# on this for CI. If build time is prohibitive, fall back to
++# is_official_build=false + manual strip (strip --strip-all chrome).
++
++is_debug = false
++is_component_build = false
++is_official_build = true
++symbol_level = 0
++blink_symbol_level = 0
++v8_symbol_level = 0
++treat_warnings_as_errors = false
++# Machine-specific paths (correct for the ubuntu HIGH-MEM box):
++clang_base_path = "/home/ubuntu/chromium-build/src/third_party/rust-toolchain-intermediate/llvm-host-install"
++clang_use_chrome_plugins = false
++rust_bindgen_root = "//third_party/rust-toolchain-intermediate/llvm-host-install"
