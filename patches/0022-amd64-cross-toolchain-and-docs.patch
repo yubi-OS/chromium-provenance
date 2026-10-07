@@ -1,1 +1,148 @@
-HA³–
+diff --git a/build/toolchain/linux/BUILD.gn b/build/toolchain/linux/BUILD.gn
+index a6e20a05c5..189ae95543 100644
+--- a/build/toolchain/linux/BUILD.gn
++++ b/build/toolchain/linux/BUILD.gn
+@@ -151,6 +151,16 @@ clang_v8_toolchain("clang_x64_v8_arm64") {
+   }
+ }
+ 
++# Support arm64 -> x64 cross-builds (mirrors the macOS clang_arm64_v8_x64
++# toolchain; needed so mksnapshot/torque can run on an arm64 host while
++# generating x64 V8 snapshots).
++clang_v8_toolchain("clang_arm64_v8_x64") {
++  toolchain_args = {
++    current_cpu = "arm64"
++    v8_current_cpu = "x64"
++  }
++}
++
+ clang_v8_toolchain("clang_x64_v8_mips64el") {
+   toolchain_args = {
+     current_cpu = "x64"
+diff --git a/docs/amd64-cross-args.gn b/docs/amd64-cross-args.gn
+new file mode 100644
+index 0000000000..92466a4615
+--- /dev/null
++++ b/docs/amd64-cross-args.gn
+@@ -0,0 +1,25 @@
++# Release build args for Antimony amd64, cross-compiled on the arm64
++# HIGH-MEM box (patch 0022, series base 507c6ee3e2).
++# Copy to out/amd64-release/args.gn before running gn gen.
++#
++# is_official_build=true enables optimization + thin LTO + CFI and the
++# installer strips the packaged binary: the amd64 deb came out at 126.5 MB
++# vs 581 MB for the unofficial build (antimony-v153.0.8010.36).
++# chrome_pgo_phase=0 because no PGO profile is provisioned for the
++# custom-toolchain cross setup.
++#
++# See docs/amd64-cross-build.md for the one-time cross-environment setup
++# (amd64 sysroot, x64 rust std, CFI sanitizer share files, env vars).
++
++is_debug = false
++is_component_build = false
++is_official_build = true
++chrome_pgo_phase = 0
++symbol_level = 0
++blink_symbol_level = 0
++v8_symbol_level = 0
++treat_warnings_as_errors = false
++target_cpu = "x64"
++clang_base_path = "/home/ubuntu/chromium-build/src/third_party/rust-toolchain-intermediate/llvm-host-install"
++clang_use_chrome_plugins = false
++rust_bindgen_root = "//third_party/rust-toolchain-intermediate/llvm-host-install"
+diff --git a/docs/amd64-cross-build.md b/docs/amd64-cross-build.md
+new file mode 100644
+index 0000000000..6ba8102656
+--- /dev/null
++++ b/docs/amd64-cross-build.md
+@@ -0,0 +1,90 @@
++# Antimony amd64 cross-build (arm64 host -> x64 target)
++
++Verified end-to-end on the HIGH-MEM box (2026-10-06/07): full official
++chrome cross build plus chrome/installer/linux:stable_deb produced
++antimony-stable_153.0.8010.36-1_amd64.deb at 126.5 MB (stripped binary,
++thin LTO + CFI) vs 581 MB for the unstripped unofficial build.
++
++## One-time cross-environment setup
++
++1. amd64 sysroot (only the arm64 one is staged by default):
++   python3 build/linux/sysroot_scripts/install-sysroot.py --arch=amd64
++
++2. Toolchain def (patch 0022): adds clang_arm64_v8_x64 to
++   build/toolchain/linux/BUILD.gn so the v8 snapshot/generator host tools
++   get an arm64-host toolchain when target_cpu="x64". Without it gn gen
++   fails with "Unresolved dependencies" naming that toolchain (macOS
++   defines the equivalent; Linux never did).
++
++3. x64 rust std: the locally built toolchain stages only
++   aarch64-unknown-linux-gnu std. Build x64 std WITH THE INSTALLED rustc
++   so crate metadata matches - the x.py/bootstrap route rebuilds rustc
++   with an unstamped version string and rustc then rejects its own std
++   (E0514 incompatible version):
++   - ln -sfn $SRC/third_party/rust-src third_party/rust-toolchain/lib/rustlib/src/rust
++   - scratch cargo project; RUSTC_BOOTSTRAP=1 cargo build --release
++     --target x86_64-unknown-linux-gnu -Z build-std=std with
++     CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=/tmp/x64-clang-linker.sh
++     and CFLAGS_x86_64_unknown_linux_gnu="--sysroot=<amd64 sysroot>"
++   - stage the resulting *.rlib into third_party/rust-toolchain/lib/
++     rustlib/x86_64-unknown-linux-gnu/lib/
++
++4. Wrapper linker /tmp/x64-clang-linker.sh (tmpfs - recreate per boot):
++   #!/bin/sh
++   exec <toolchain>/bin/clang --target=x86_64-unknown-linux-gnu \
++     --sysroot=<amd64 sysroot> -fuse-ld=lld "$@"
++   (-fuse-ld=lld is required: without it clang's linker probe picks the
++   host aarch64 bfd, which rejects x86_64 emulation.)
++
++5. TypeScript devtools steps: third_party/typescript ships an amd64-only
++   tsc 3pp bundle; the aarch64 tsc exists at linux-arm64/src/lib/tsc and
++   typescript.py selects it via platform.machine(), but official-config
++   devtools actions invoke the linux-amd64 path directly. Tree-local
++   (NOT committed; recreate per checkout):
++   ln -s ../../../linux-arm64/src/lib/tsc \
++     third_party/typescript/linux-amd64/src/lib/tsc
++
++6. qemu-user fallback: apt install qemu-user qemu-user-binfmt - binfmt
++   registers x86_64 so any other amd64-only host tool still runs on the
++   arm64 host (qemu-user-static no longer exists on Ubuntu 26.04).
++
++7. CFI sanitizer share files: is_official_build enables CFI
++   (-fsanitize=cfi-vcall/icall + -fwhole-program-vtables); the locally
++   built toolchain's clang resource dir lacks the default ignorelists
++   (clang++: error: missing sanitizer ignorelist). Download the official
++   chromium clang package at the tree's pinned revision
++   (tools/clang/scripts/update.py PACKAGE_VERSION =
++   llvmorg-24-init-3796-g20e97c4b-2) and copy
++   lib/clang/24/share/{cfi,asan,msan}_ignorelist.txt into
++   <toolchain>/lib/clang/24/share/.
++
++8. Env vars (the bridge runs as root with no HOME):
++   HOME=/tmp GOCACHE=/tmp/go-cache GIT_CONFIG_GLOBAL=/tmp/gitconfig-build
++   with /tmp/gitconfig-build containing [safe] directory = *
++   (dawn's generate-sources needs GOCACHE; angle's commit_id and any git
++   call need safe.directory; both fail without them).
++
++## Build
++
++    cp docs/amd64-cross-args.gn out/amd64-release/args.gn
++    <gn-cipd>/gn gen out/amd64-release
++    ninja -C out/amd64-release chrome
++    ninja -C out/amd64-release chrome/installer/linux:stable_deb
++
++Deb verification: dpkg-deb -I shows antimony-stable / amd64; extract and
++check the inner /opt/antimony/chrome is x86-64 AND stripped
++(readelf -S | grep -c symtab == 0).
++
++## Pitfalls (all paid for once)
++
++- Abrupt halts and ninja kills TRUNCATE in-flight outputs while leaving
++  them "fresh" by mtime: after any halt, gn gen, then
++  find out/<dir> -type f \( -name '*.rlib' -o -name '*.rmeta' \
++    -o -name '*.o' -o -name '*.a' -o -name '*.so' \) -size 0 -delete
++  and check devtools gen outputs for tiny truncations (a 35-byte
++  marked.js / 0-byte marked.d.ts surfaced as TS2306 "is not a module"
++  several thousand steps later).
++- First gn gen without the toolchain def fails listing
++  clang_arm64_v8_x64 as unresolved - that IS the patch's job.
++- The x64 rust std MUST be compiled by the installed toolchain rustc;
++  a bootstrap-rebuilt rustc's std is rejected (E0514).
