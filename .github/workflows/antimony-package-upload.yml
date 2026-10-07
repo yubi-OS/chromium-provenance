@@ -17,10 +17,10 @@ jobs:
           set -euo pipefail
           rm -rf /tmp/antimony-release && mkdir -p /tmp/antimony-release
           cd /tmp/antimony-release
-          cp /home/ubuntu/chromium-build/src/out/arm64-release/antimony-stable_*_arm64.deb .
-          cp /home/ubuntu/chromium-build/src/out/arm64-release/antimony-stable_*_aarch64.rpm .
-          cp /home/ubuntu/chromium-build/src/out/amd64-release/antimony-stable_*_amd64.deb .
-          cp /home/ubuntu/chromium-build/src/out/amd64-release/antimony-stable_*_x86_64.rpm .
+          cp /home/ubuntu/chromium-build/src/out/arm64-release/antimony-stable*arm64.deb .
+          cp /home/ubuntu/chromium-build/src/out/arm64-release/antimony-stable*aarch64.rpm .
+          cp /home/ubuntu/chromium-build/src/out/amd64-release/antimony-stable*amd64.deb .
+          cp /home/ubuntu/chromium-build/src/out/amd64-release/antimony-stable*x86_64.rpm .
           sha256sum * | tee SHA256SUMS
           {
             echo "## SHA256"
