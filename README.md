@@ -6,6 +6,8 @@ Development follows the Brave / ungoogled-chromium model: [`yubi-OS/chromium`](h
 
 **Status: prerelease.** The first packages shipped 2026-10-07 as [`antimony-v153.0.8010.36-r2`](https://github.com/yubi-OS/chromium-provenance/releases/tag/antimony-v153.0.8010.36-r2). This is not production-ready software; the honest boundaries are listed below and enforced in `CONSTRAINTS.md`.
 
+Project site: [antimonybrowser.com](https://antimonybrowser.com) (also [antimony-browser.com](https://antimony-browser.com)).
+
 ## Install (prerelease r2)
 
 | Package | Architecture | Size | SHA256 |
