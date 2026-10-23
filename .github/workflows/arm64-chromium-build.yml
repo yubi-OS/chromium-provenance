@@ -35,9 +35,9 @@ jobs:
       - name: Apply provenance-gate patches
         run: |
           set -euo pipefail
-          if ls patches/0*.patch > /dev/null 2>&1; then
-            if git -C /home/ubuntu/chromium-build/src apply --check --whitespace=nowarn patches/0*.patch 2>/dev/null; then
-              git -C /home/ubuntu/chromium-build/src apply --whitespace=nowarn patches/0*.patch
+          if ls patches/patches-156/0*.patch > /dev/null 2>&1; then
+            if git -C /home/ubuntu/chromium-build/src apply --check --whitespace=nowarn patches/patches-156/0*.patch 2>/dev/null; then
+              git -C /home/ubuntu/chromium-build/src apply --whitespace=nowarn patches/patches-156/0*.patch
               echo "patches applied"
             else
               echo "patches already applied (branch state)"

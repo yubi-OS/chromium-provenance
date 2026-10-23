@@ -1,0 +1,120 @@
+From 0f34d0bf5c7a6d1ff1091d8e29bd9a835425b9df Mon Sep 17 00:00:00 2001
+From: OMNI-AGENT <foil-copy-overrate@users.noreply.github.com>
+Date: Fri, 23 Oct 2026 04:08:40 -0700
+Subject: [PATCH 39/39] series 0023: aarch64 host build env (native apt gperf
+ via symlink, arm64 rust toolchain hook, arm64 tsc, clang PRIVATE link fix)
+
+---
+ DEPS                                        | 10 ----------
+ third_party/typescript/typescript.py        |  5 +++++
+ tools/clang/translation_unit/CMakeLists.txt |  2 +-
+ tools/rust/build_rust.py                    | 15 ++++++++++++++-
+ 4 files changed, 20 insertions(+), 12 deletions(-)
+
+diff --git a/DEPS b/DEPS
+index a11f57e15c..514ae4b11a 100644
+--- a/DEPS
++++ b/DEPS
+@@ -2349,16 +2349,6 @@ deps = {
+       'condition': 'checkout_win',
+   },
+ 
+-  'src/third_party/gperf/cipd': {
+-      'packages': [
+-        {
+-          'package': 'infra/3pp/tools/gperf/${{platform}}',
+-          'version': 'version:3@3.2',
+-        },
+-      ],
+-      'condition': 'host_os == "linux" and non_git_source',
+-      'dep_type': 'cipd',
+-  },
+ 
+   # Always download Linux x64 package regardless of host OS for RBE workers.
+   'src/third_party/cpython3/linux-amd64': {
+diff --git a/third_party/typescript/typescript.py b/third_party/typescript/typescript.py
+index 7c2db710d1..2d87278f0d 100755
+--- a/third_party/typescript/typescript.py
++++ b/third_party/typescript/typescript.py
+@@ -16,6 +16,11 @@ def GetBinaryPath():
+   else:
+     darwin_path = 'mac-amd64'
+ 
++  # aarch64 Linux: use the native arm64 tsc (@typescript/typescript-linux-arm64);
++  # the 3pp bundle at linux-amd64 is an x86-64 binary.
++  if platform.system() == 'Linux' and platform.machine() == 'aarch64':
++    return os_path.normpath(os_path.join(
++        os_path.dirname(__file__), 'linux-arm64', 'src', 'lib', 'tsc'))
+   return os_path.normpath(os_path.join(os_path.dirname(__file__), *{
+     'Darwin': (darwin_path, 'src', 'lib', 'tsc'),
+     'Linux': ('linux-amd64', 'src', 'lib', 'tsc'),
+diff --git a/tools/clang/translation_unit/CMakeLists.txt b/tools/clang/translation_unit/CMakeLists.txt
+index 9b4fd8b295..326b668477 100644
+--- a/tools/clang/translation_unit/CMakeLists.txt
++++ b/tools/clang/translation_unit/CMakeLists.txt
+@@ -8,7 +8,7 @@ add_llvm_executable(translation_unit
+   TranslationUnitGenerator.cpp
+   )
+ 
+-target_link_libraries(translation_unit
++target_link_libraries(translation_unit PRIVATE
+   clangAST
+   clangASTMatchers
+   clangAnalysis
+diff --git a/tools/rust/build_rust.py b/tools/rust/build_rust.py
+index f3b67fecf0..d5c4f0bece 100755
+--- a/tools/rust/build_rust.py
++++ b/tools/rust/build_rust.py
+@@ -345,6 +345,9 @@ def InstallBetaPackage(package_dir, install_dir):
+ 
+ 
+ def VendorForStdlib(cargo_bin):
++    # ARM64 host: the fetched beta cargo is x86_64 and cannot execute.
++    cargo_bin = "/usr/bin/cargo"
++
+     '''Runs `cargo vendor` to pull down standard library dependencies.'''
+     os.chdir(RUST_SRC_DIR)
+ 
+@@ -663,6 +666,8 @@ def RustTargetTriple():
+     elif sys.platform == 'win32':
+         return 'x86_64-pc-windows-msvc'
+     else:
++        if platform.machine() == 'aarch64':
++            return 'aarch64-unknown-linux-gnu'
+         return 'x86_64-unknown-linux-gnu'
+ 
+ 
+@@ -674,6 +679,9 @@ def BuildLLVMLibraries(skip_checkout, llvm_force_head_revision):
+         os.path.join(CLANG_SCRIPTS_DIR, 'build.py'),
+         '--disable-asserts',
+         '--no-tools',
++        '--use-system-cmake',
++        '--host-cc=/usr/bin/clang',
++        '--host-cxx=/usr/bin/clang++',
+         '--no-runtimes',
+         # PIC needed for Rust build (links LLVM into shared object)
+         '--pic',
+@@ -979,6 +987,8 @@ def main():
+         # Fetch sysroot we build rustc against. This ensures a minimum supported
+         # host (not Chromium target). Since the rustc linux package is for
+         # x86_64 only, that is the sole needed sysroot.
++        debian_sysroot = None  # aarch64 native build: system glibc (bullseye sysroots are for cross/target use)
++    if platform.machine() != 'aarch64':
+         debian_sysroot = DownloadDebianSysroot('amd64', args.skip_checkout)
+ 
+     # Require zlib compression.
+@@ -998,7 +1008,10 @@ def main():
+     # is available.
+     if sys.platform != 'win32' and not args.sync_for_gnrt:
+         # Building cargo depends on OpenSSL.
+-        AddOpenSSLToEnv()
++        # aarch64 host: the 3pp package is linux-amd64 openssl 1.1.1 (too old, wrong arch);
++        # use the system OpenSSL 3.x via pkg-config instead.
++        if platform.machine() != 'aarch64':
++            AddOpenSSLToEnv()
+ 
+     xpy = XPy(zlib_path, libxml2_dirs, debian_sysroot, args.verbose)
+ 
+-- 
+2.53.0
+

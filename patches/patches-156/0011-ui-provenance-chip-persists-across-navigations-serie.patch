@@ -1,0 +1,199 @@
+From cdec3b13b7c9dd2e877d714dddbdbc5fc6d3aa0b Mon Sep 17 00:00:00 2001
+From: OMNI-AGENT <foil-copy-overrate@duck.com>
+Date: Tue, 29 Sep 2026 16:37:54 -0700
+Subject: [PATCH 11/39] ui: provenance chip persists across navigations (series
+ 0011 fixup)
+
+---
+ .../location_bar/provenance_chip_view.cc      | 77 +++++++++----------
+ .../views/location_bar/provenance_chip_view.h | 30 +++++---
+ 2 files changed, 54 insertions(+), 53 deletions(-)
+
+diff --git a/chrome/browser/ui/views/location_bar/provenance_chip_view.cc b/chrome/browser/ui/views/location_bar/provenance_chip_view.cc
+index 8b38ec3d51..ac612dbb77 100644
+--- a/chrome/browser/ui/views/location_bar/provenance_chip_view.cc
++++ b/chrome/browser/ui/views/location_bar/provenance_chip_view.cc
+@@ -6,6 +6,7 @@
+ #include "base/time/time.h"
+ #include "chrome/browser/ui/views/chrome_typography.h"
+ #include "chrome/browser/ui/views/location_bar/location_bar_view.h"
++#include "components/omnibox/browser/location_bar_model.h"
+ #include "components/provenance_gate/browser/provenance_evidence_store.h"
+ #include "content/public/browser/web_contents.h"
+ #include "ui/base/metadata/metadata_impl_macros.h"
+@@ -14,17 +15,15 @@
+ 
+ namespace {
+ 
+-// Bounded re-check window: the page-image scanner records evidence shortly
+-// after the page commits (image fetch + sandboxed C2PA inspection), but the
+-// first LocationBarView::Update runs before that. Poll a few times per
+-// navigation so the chip appears as soon as evidence lands; bounded as a
+-// transport guard, not policy.
+-constexpr int kMaxEvidencePolls = 20;
++// The persistent poll interval. LocationBarView::Update has no post-commit
++// firing (instrumented: it runs once, pre-commit, with a transiently empty
++// URL), so the chip tracks the DISPLAYED url on a timer. A map lookup plus
++// a string compare per tick per window is negligible.
+ constexpr base::TimeDelta kPollInterval = base::Milliseconds(500);
+ 
+ }  // namespace
+ 
+-// Series 0006: relays evidence-store notifications to the chip through a
++// Series 0011: relays evidence-store notifications to the chip through a
+ // WeakPtr so a pending notification can never touch a destroyed chip.
+ class ProvenanceChipView::EvidenceObserver
+     : public provenance_gate::ProvenanceEvidenceStore::Observer {
+@@ -60,17 +59,9 @@ ProvenanceChipView::~ProvenanceChipView() {
+ }
+ 
+ void ProvenanceChipView::Update(content::WebContents* contents) {
+-  if (!contents) {
+-    url_ = GURL();
+-    polls_left_ = 0;
+-    SetVisible(false);
+-    return;
+-  }
+-  // Every non-null update re-arms the bounded poll. RefreshEvidence pulls
+-  // the live committed URL from the parent LocationBarView, so mid-
+-  // navigation updates (transiently empty committed URL) and tab switches
+-  // are handled by the poll rather than by clobbering url_ here.
+-  polls_left_ = kMaxEvidencePolls;
++  // Immediate-refresh trigger only. Never clears chip state here: transient
++  // null updates (init, blocked navigations) must not hide an evidenced
++  // chip, and the persistent poll owns the displayed-URL tracking.
+   RefreshEvidence();
+ }
+ 
+@@ -82,24 +73,30 @@ void ProvenanceChipView::OnEvidenceRecorded(const GURL& page_origin) {
+ }
+ 
+ void ProvenanceChipView::RefreshEvidence() {
+-  // The poll doubles as the URL tracker: pull the live tab's committed URL
+-  // from the parent LocationBarView so the chip tracks the visible page
+-  // even when LocationBarView::Update does not fire post-commit.
++  // The DISPLAYED url (LocationBarModel), not the last-committed one: on a
++  // blocked reload the omnibox keeps showing the attempted origin, and the
++  // chip should keep reporting it.
++  GURL url;
+   if (auto* location_bar = static_cast<LocationBarView*>(parent())) {
+-    if (content::WebContents* contents = location_bar->GetWebContents()) {
+-      const GURL url = contents->GetLastCommittedURL();
+-      if (!url.is_empty() && url_ != url) {
+-        url_ = url;
+-        polls_left_ = kMaxEvidencePolls;
+-      }
++    if (const LocationBarModel* model = location_bar->GetLocationBarModel()) {
++      url = model->GetURL();
+     }
+   }
+-  bool ai_detected = false;
+-  if (url_.is_valid()) {
+-    ai_detected = !provenance_gate::ProvenanceEvidenceStore::Get()
+-                       .GetEvidenceForOrigin(url_)
+-                       .empty();
++  const bool ai_detected =
++      url.is_valid() &&
++      !provenance_gate::ProvenanceEvidenceStore::Get()
++           .GetEvidenceForOrigin(url)
++           .empty();
++
++  // Log transitions only; the poll runs forever and per-tick logs would be
++  // noise.
++  if (url_ != url || ai_detected != last_ai_) {
++    VLOG(1) << "provenance_gate: chip url=" << url.spec()
++            << " ai=" << ai_detected;
+   }
++  url_ = url;
++  last_ai_ = ai_detected;
++
+   SetVisible(ai_detected);
+   if (ai_detected) {
+     SetText(u"AI CONTENT");
+@@ -108,16 +105,12 @@ void ProvenanceChipView::RefreshEvidence() {
+         u"(unverified)");
+     SetEnabledColor(SkColorSetRGB(0xD9, 0x30, 0x25));
+   }
+-  VLOG(1) << "provenance_gate: chip url=" << url_.spec()
+-          << " ai=" << ai_detected << " polls_left=" << polls_left_;
+-  if (!ai_detected && polls_left_ > 0) {
+-    --polls_left_;
+-    base::SequencedTaskRunner::GetCurrentDefault()->PostDelayedTask(
+-        FROM_HERE,
+-        base::BindOnce(&ProvenanceChipView::RefreshEvidence,
+-                       weak_factory_.GetWeakPtr()),
+-        kPollInterval);
+-  }
++
++  base::SequencedTaskRunner::GetCurrentDefault()->PostDelayedTask(
++      FROM_HERE,
++      base::BindOnce(&ProvenanceChipView::RefreshEvidence,
++                     weak_factory_.GetWeakPtr()),
++      kPollInterval);
+ }
+ 
+ BEGIN_METADATA(ProvenanceChipView)
+diff --git a/chrome/browser/ui/views/location_bar/provenance_chip_view.h b/chrome/browser/ui/views/location_bar/provenance_chip_view.h
+index 2fd05415c0..83d040ee76 100644
+--- a/chrome/browser/ui/views/location_bar/provenance_chip_view.h
++++ b/chrome/browser/ui/views/location_bar/provenance_chip_view.h
+@@ -18,17 +18,24 @@ namespace provenance_gate {
+ class ProvenanceEvidenceStore;
+ }
+ 
+-// Series 0006: omnibox chip showing the provenance state of the current
+-// page's origin. v1 shows the chip only when recorded evidence exists for
+-// the origin (e.g. a C2PA manifest claiming AI generation). The chip
+-// reports what a manifest CLAIMS, not a verified fact (CONSTRAINTS.md
++// Series 0011: omnibox chip showing the provenance state of the URL the
++// location bar is DISPLAYING (via the LocationBarModel), so the chip stays
++// up through a blocked reload (the omnibox keeps showing the attempted
++// origin on the error page). v1 shows the chip only when recorded evidence
++// exists for that origin (e.g. a C2PA manifest claiming AI generation). The
++// chip reports what a manifest CLAIMS, not a verified fact (CONSTRAINTS.md
+ // forbids "human-verified" claims); manifest signature validation lands
+ // with the c2pa-rs vendoring follow-up.
+ //
+-// Refresh sources: LocationBarView::Update on navigation / tab switch, a
+-// short bounded poll after each navigation (the browser-side image scanner
+-// records evidence shortly after commit), and the evidence store's
+-// observer notification the moment evidence lands (Series 0006).
++// Refresh model: a persistent 500ms poll is the source of truth. There is
++// no reliable post-commit update hook for the location bar
++// (LocationBarView::Update fires once, pre-commit, with a transiently empty
++// URL — instrumented), so the chip tracks the displayed URL on a timer; a
++// map lookup + string compare per tick is negligible. The evidence store's
++// observer notification (UI thread) additionally refreshes the chip the
++// moment evidence lands, and Update() acts as an immediate-refresh trigger
++// only — it never clears chip state, because transient null updates
++// (init, blocked navigations) must not hide an evidenced chip.
+ class ProvenanceChipView : public views::Label {
+  METADATA_HEADER(ProvenanceChipView, views::Label)
+ 
+@@ -39,19 +46,20 @@ class ProvenanceChipView : public views::Label {
+   ProvenanceChipView(const ProvenanceChipView&) = delete;
+   ProvenanceChipView& operator=(const ProvenanceChipView&) = delete;
+ 
+-  // Called on navigation / tab switch by LocationBarView::Update.
++  // Immediate-refresh trigger (navigation / tab switch). Never clears
++  // state; the persistent poll owns the displayed-URL tracking.
+   void Update(content::WebContents* contents);
+ 
+  private:
+   // Subscribes to the evidence store so the chip refreshes the moment
+-  // evidence for this page's origin is recorded.
++  // evidence for the displayed origin is recorded.
+   class EvidenceObserver;
+ 
+   void RefreshEvidence();
+   void OnEvidenceRecorded(const GURL& page_origin);
+ 
+   GURL url_;
+-  int polls_left_ = 0;
++  bool last_ai_ = false;
+   std::unique_ptr<EvidenceObserver> evidence_observer_;
+   base::WeakPtrFactory<ProvenanceChipView> weak_factory_{this};
+ };
+-- 
+2.53.0
+

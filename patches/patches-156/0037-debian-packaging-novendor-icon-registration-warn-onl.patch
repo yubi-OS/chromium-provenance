@@ -1,0 +1,46 @@
+From 5ea03d51ab4fc50132184e61f27c8a5bdc9675a9 Mon Sep 17 00:00:00 2001
+From: OMNI-AGENT <foil-copy-overrate@duck.com>
+Date: Mon, 5 Oct 2026 23:46:48 -0700
+Subject: [PATCH 37/39] debian packaging: --novendor icon registration +
+ warn-only xdg-utils guard (fixes half-configured-antimony apt deadlock)
+
+---
+ .../installer/linux/common/postinst.include   | 23 +++++++++++--------
+ 1 file changed, 14 insertions(+), 9 deletions(-)
+
+diff --git a/chrome/installer/linux/common/postinst.include b/chrome/installer/linux/common/postinst.include
+index d237a1affe..566ae3aa61 100644
+--- a/chrome/installer/linux/common/postinst.include
++++ b/chrome/installer/linux/common/postinst.include
+@@ -1,14 +1,19 @@
+-# Add icons to the system icons
++# Add icons to the system icons.
++# Icon registration is cosmetic: a missing xdg-utils must never fail package
++# configuration (a half-configured package blocked every apt operation on the
++# HIGH-MEM runner, 2026-10-06).
++# --novendor: @@PACKAGE ("antimony") carries no vendor prefix, and
++# xdg-icon-resource exits 1 without the flag.
+ XDG_ICON_RESOURCE="`command -v xdg-icon-resource 2> /dev/null || true`"
+-if [ ! -x "$XDG_ICON_RESOURCE" ]; then
+-  echo "Error: Could not find xdg-icon-resource" >&2
+-  exit 1
++if [ -x "$XDG_ICON_RESOURCE" ]; then
++  for icon in @@logo_resources_png; do
++    size="$(echo ${icon} | sed 's/[^0-9]//g')"
++    "$XDG_ICON_RESOURCE" install --novendor --size "${size}" "@@INSTALLDIR/${icon}" \
++      "@@PACKAGE"
++  done
++else
++  echo "Warning: xdg-icon-resource not found, skipping icon registration" >&2
+ fi
+-for icon in @@logo_resources_png; do
+-  size="$(echo ${icon} | sed 's/[^0-9]//g')"
+-  "$XDG_ICON_RESOURCE" install --size "${size}" "@@INSTALLDIR/${icon}" \
+-    "@@PACKAGE"
+-done
+ 
+ # Update cache of .desktop file MIME types. Non-fatal since it's just a cache.
+ update-desktop-database > /dev/null 2>&1 || true
+-- 
+2.53.0
+
