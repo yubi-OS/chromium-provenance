@@ -1,0 +1,35 @@
+From b71040e51391a50d6e36228f5fabab7f99d284fd Mon Sep 17 00:00:00 2001
+From: OMNI-AGENT <foil-copy-overrate@duck.com>
+Date: Wed, 30 Sep 2026 13:45:10 -0700
+Subject: [PATCH 19/39] ui: settings/provenance - Add button inline with the
+ site input (label moved to aria-label, row top-aligned; measured deltaTop=0)
+ (series 0016 fixup 3)
+
+---
+ .../resources/settings/provenance_page/provenance_page.html    | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/chrome/browser/resources/settings/provenance_page/provenance_page.html b/chrome/browser/resources/settings/provenance_page/provenance_page.html
+index 9ae70986bf..cc2a1e5a22 100644
+--- a/chrome/browser/resources/settings/provenance_page/provenance_page.html
++++ b/chrome/browser/resources/settings/provenance_page/provenance_page.html
+@@ -40,6 +40,7 @@
+   }
+ 
+   .prov-add-row {
++    align-items: flex-start;
+     display: flex;
+     gap: 12px;
+     margin-top: 12px;
+@@ -84,7 +85,7 @@
+   </template>
+   <div class="prov-empty" hidden$="[[exemptOrigins_.length]]">No sites are exempt.</div>
+   <div class="prov-add-row">
+-    <cr-input label="Add a site" placeholder="example.com" value="{{newOrigin_}}"></cr-input>
++    <cr-input aria-label="Add a site" placeholder="example.com" value="{{newOrigin_}}"></cr-input>
+     <cr-button class="prov-add" on-click="onAdd_">Add</cr-button>
+   </div>
+ </div>
+-- 
+2.53.0
+

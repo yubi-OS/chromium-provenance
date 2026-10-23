@@ -1,0 +1,43 @@
+From a2546c0eec5889df99db3e3c0210ecc03fe5de90 Mon Sep 17 00:00:00 2001
+From: OMNI-AGENT <foil-copy-overrate@duck.com>
+Date: Thu, 1 Oct 2026 02:18:57 -0700
+Subject: [PATCH 34/39] series 0018 fixup 5: settings/help copyright notice
+ reads Copyright 2026 yubi-OS authors. All rights reserved. with the yubi-OS
+ text linked to https://github.com/yubi-OS (hardcoded in the about page
+ template - version_info copyright is plain text and i18n escapes HTML);
+ BRANDING COPYRIGHT wording aligned to yubi-OS authors
+
+---
+ chrome/app/theme/chromium/BRANDING                              | 2 +-
+ chrome/browser/resources/settings/about_page/about_page.html.ts | 2 +-
+ 2 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/chrome/app/theme/chromium/BRANDING b/chrome/app/theme/chromium/BRANDING
+index 644c4a3b08..f89ce5883c 100644
+--- a/chrome/app/theme/chromium/BRANDING
++++ b/chrome/app/theme/chromium/BRANDING
+@@ -4,7 +4,7 @@ PRODUCT_FULLNAME=Antimony
+ PRODUCT_SHORTNAME=Antimony
+ PRODUCT_INSTALLER_FULLNAME=Antimony Installer
+ PRODUCT_INSTALLER_SHORTNAME=Antimony Installer
+-COPYRIGHT=Copyright @LASTCHANGE_YEAR@ yubi-OS. All rights reserved.
++COPYRIGHT=Copyright @LASTCHANGE_YEAR@ yubi-OS authors. All rights reserved.
+ MAC_BUNDLE_ID=org.yubios.Antimony
+ MAC_CREATOR_CODE=Cr24
+ MAC_TEAM_ID=
+diff --git a/chrome/browser/resources/settings/about_page/about_page.html.ts b/chrome/browser/resources/settings/about_page/about_page.html.ts
+index b9ac4e634f..65f88440ad 100644
+--- a/chrome/browser/resources/settings/about_page/about_page.html.ts
++++ b/chrome/browser/resources/settings/about_page/about_page.html.ts
+@@ -109,7 +109,7 @@ export function getHtml(this: SettingsAboutPageElement) {
+   <div class="info-sections">
+     <div class="info-section">
+       <div class="secondary">$i18n{aboutProductTitle}</div>
+-      <div class="secondary">$i18n{aboutProductCopyright}</div>
++      <div class="secondary">Copyright 2026 <a href="https://github.com/yubi-OS">yubi-OS</a> authors. All rights reserved.</div>
+     </div>
+ 
+     <div class="info-section">
+-- 
+2.53.0
+

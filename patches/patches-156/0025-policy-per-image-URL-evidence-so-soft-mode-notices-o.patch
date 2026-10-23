@@ -1,0 +1,104 @@
+From b3f9f7e0736a810de086ca1b4d4b30388ab32841 Mon Sep 17 00:00:00 2001
+From: OMNI-AGENT <foil-copy-overrate@duck.com>
+Date: Wed, 30 Sep 2026 16:55:32 -0700
+Subject: [PATCH 25/39] policy: per-image-URL evidence so soft-mode notices
+ only hit AI-tagged images, not every image from the origin (series 0016 fixup
+ 5)
+
+---
+ .../browser/provenance_evidence_store.cc        | 17 +++++++++++++++++
+ .../browser/provenance_evidence_store.h         |  5 +++++
+ .../browser/provenance_page_inspector.cc        |  7 ++++++-
+ .../browser/provenance_page_text_service.h      |  7 ++++---
+ 4 files changed, 32 insertions(+), 4 deletions(-)
+
+diff --git a/components/provenance_gate/browser/provenance_evidence_store.cc b/components/provenance_gate/browser/provenance_evidence_store.cc
+index bcd5d1d723..b8b6f00107 100644
+--- a/components/provenance_gate/browser/provenance_evidence_store.cc
++++ b/components/provenance_gate/browser/provenance_evidence_store.cc
+@@ -45,4 +45,21 @@ std::vector<Evidence> ProvenanceEvidenceStore::GetEvidenceForOrigin(
+   return it->second;
+ }
+ 
++void ProvenanceEvidenceStore::RecordImageEvidence(
++    const GURL& image_url,
++    Evidence evidence) {
++  const std::string key = image_url.spec();
++  {
++    base::AutoLock lock(lock_);
++    evidence_by_image_url_[key].push_back(std::move(evidence));
++  }
++}
++
++bool ProvenanceEvidenceStore::HasEvidenceForImageUrl(
++    const GURL& image_url) {
++  const std::string key = image_url.spec();
++  base::AutoLock lock(lock_);
++  return evidence_by_image_url_.contains(key);
++}
++
+ }  // namespace provenance_gate
+diff --git a/components/provenance_gate/browser/provenance_evidence_store.h b/components/provenance_gate/browser/provenance_evidence_store.h
+index c80fb924b4..80346250c9 100644
+--- a/components/provenance_gate/browser/provenance_evidence_store.h
++++ b/components/provenance_gate/browser/provenance_evidence_store.h
+@@ -39,6 +39,10 @@ class ProvenanceEvidenceStore {
+ 
+   void RecordEvidence(const GURL& page_origin, Evidence evidence);
+   std::vector<Evidence> GetEvidenceForOrigin(const GURL& url);
++  // Series 0016 fixup 5: per-image-URL evidence so soft-mode notices only
++  // hit the specific AI-tagged images, not every image from the origin.
++  void RecordImageEvidence(const GURL& image_url, Evidence evidence);
++  bool HasEvidenceForImageUrl(const GURL& image_url);
+ 
+  private:
+   friend class base::NoDestructor<ProvenanceEvidenceStore>;
+@@ -46,6 +50,7 @@ class ProvenanceEvidenceStore {
+ 
+   base::Lock lock_;
+   std::map<std::string, std::vector<Evidence>> evidence_by_origin_;
++  std::map<std::string, std::vector<Evidence>> evidence_by_image_url_;
+   base::ObserverList<Observer> observers_;
+ };
+ 
+diff --git a/components/provenance_gate/browser/provenance_page_inspector.cc b/components/provenance_gate/browser/provenance_page_inspector.cc
+index 9fc2bc46b6..4f62ea3e68 100644
+--- a/components/provenance_gate/browser/provenance_page_inspector.cc
++++ b/components/provenance_gate/browser/provenance_page_inspector.cc
+@@ -101,9 +101,14 @@ void ProvenancePageImageScanner::OnImageInspected(
+   evidence.confidence = 1.0;
+   evidence.source = "c2pa";
+   ProvenanceEvidenceStore::Get().RecordEvidence(page_origin,
+-                                                std::move(evidence));
++                                                evidence);
++  // Series 0016 fixup 5: also record per-image-URL evidence so soft-mode
++  // notices only hit the specific AI-tagged images.
++  ProvenanceEvidenceStore::Get().RecordImageEvidence(image_url,
++                                                     evidence);
+   VLOG(1) << "provenance_gate: evidence recorded origin="
+           << url::Origin::Create(page_origin).Serialize()
++          << " image=" << image_url.spec()
+           << " signal=c2pa_unverified_ai_action";
+ }
+ 
+diff --git a/components/provenance_gate/browser/provenance_page_text_service.h b/components/provenance_gate/browser/provenance_page_text_service.h
+index 8afcf57ba4..0f12ae67f2 100644
+--- a/components/provenance_gate/browser/provenance_page_text_service.h
++++ b/components/provenance_gate/browser/provenance_page_text_service.h
+@@ -91,9 +91,10 @@ class ProvenancePageTextImpl : public mojom::ProvenancePageText {
+             ProvenanceBypassStore::Get().IsBypassed(image_url)) {
+           continue;
+         }
+-        if (!ProvenanceEvidenceStore::Get()
+-                 .GetEvidenceForOrigin(image_url)
+-                 .empty()) {
++        // Series 0016 fixup 5: per-image-URL check so only the specific
++        // AI-tagged images get notices, not every image from the origin.
++        if (ProvenanceEvidenceStore::Get()
++                 .HasEvidenceForImageUrl(image_url)) {
+           blocked.push_back(image_url_string);
+         }
+       }
+-- 
+2.53.0
+

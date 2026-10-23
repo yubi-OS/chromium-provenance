@@ -1,0 +1,30 @@
+From eff84d52f87c6410bafb7ba1021c6598e1e5ac73 Mon Sep 17 00:00:00 2001
+From: OMNI-AGENT <foil-copy-overrate@duck.com>
+Date: Wed, 30 Sep 2026 14:11:17 -0700
+Subject: [PATCH 20/39] ui: kill AI Mode omnibox entrypoint via IsAimEligible -
+ IsAimOmniboxEntrypointEnabled and the aim page-action controller call it
+ DIRECTLY, bypassing the IsEligibleByServer switch (series 0015 fixup)
+
+---
+ components/omnibox/browser/aim_eligibility_service.cc | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/components/omnibox/browser/aim_eligibility_service.cc b/components/omnibox/browser/aim_eligibility_service.cc
+index 4c5aa9da6d..3dd24b0bfb 100644
+--- a/components/omnibox/browser/aim_eligibility_service.cc
++++ b/components/omnibox/browser/aim_eligibility_service.cc
+@@ -461,6 +461,11 @@ bool AimEligibilityService::IsAimLocallyEligible() const {
+ }
+ 
+ bool AimEligibilityService::IsAimEligible() const {
++  // Series 0015 fixup: yubiOS kill switch - the provenance gate replaces AI
++  // Mode. The omnibox entrypoint check (omnibox_field_trial
++  // IsAimOmniboxEntrypointEnabled) calls IsAimEligible() DIRECTLY and never
++  // reaches IsEligibleByServer(), so the kill switch lives here as well.
++  return false;
+   // Check local eligibility first.
+   if (!IsAimLocallyEligible()) {
+     return false;
+-- 
+2.53.0
+
