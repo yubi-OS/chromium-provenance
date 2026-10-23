@@ -9,7 +9,9 @@ permissions:
   contents: write
 jobs:
   upload:
-    runs-on: [self-hosted, Linux, ARM64]
+    runs-on:
+      group: chromium-high-mem
+      labels: [self-hosted, Linux, ARM64]
     steps:
       - name: Verify and upload r1 assets to the draft release
         env:
@@ -17,6 +19,7 @@ jobs:
           TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
+          hostname
           cd /home/ubuntu/release-artifacts/antimony-156-r3
           sha256sum -c SHA256SUMS
           gh release upload "$TAG" antimony-stable_156.0.8078.47-1_arm64.deb antimony-stable_156.0.8078.47-1_amd64.deb antimony-stable-156.0.8078.47-1.aarch64.rpm antimony-stable-156.0.8078.47-1.x86_64.rpm Antimony-156.0.8078.47-aarch64.AppImage Antimony-156.0.8078.47-x86_64.AppImage SHA256SUMS --repo yubi-OS/chromium-provenance --clobber
