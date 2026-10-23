@@ -1,0 +1,7 @@
+abi <abi/4.0>,
+include <tunables/global>
+
+profile antimony-appimage /tmp/.mount_*/usr/bin/antimony flags=(unconfined) {
+  userns,
+  include if exists <local/antimony-appimage>
+}
